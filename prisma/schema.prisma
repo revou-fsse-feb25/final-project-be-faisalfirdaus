@@ -1,0 +1,174 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
+// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ================== Enums ==================
+enum Role {
+  USER
+  ADMIN
+}
+
+enum StudioType {
+  Regular
+  IMAX
+  Premier
+}
+
+enum MovieStatus {
+  COMING_SOON
+  NOW_SHOWING
+  ARCHIVED
+}
+
+enum BookingStatus {
+  Pending   
+  Confirmed
+  Claimed
+  Cancelled
+  Expired
+}
+
+enum PaymentStatus {
+  Delayed      
+  Success      
+  Failed
+}
+
+// ================== Models ==================
+model User {
+  id         Int       @id @default(autoincrement())
+  username   String    @db.VarChar(100)
+  email      String    @unique @db.VarChar(100)
+  password   String    @db.VarChar(255)
+  phone      String
+  role       Role
+  created_at DateTime  @default(now())
+
+  bookings   Booking[]
+}
+
+model Movie {
+  movie_id         Int          @id @default(autoincrement())
+  title            String
+  description      String
+  duration_minutes Int
+  poster_url       String       @db.VarChar(500)
+  status           MovieStatus
+  is_active        Boolean      @default(true)
+
+  showtimes        Showtime[]
+  genres           MovieGenre[]
+}
+
+model Genre {
+  genre_id Int          @id @default(autoincrement())
+  name     String
+
+  movies   MovieGenre[]
+}
+
+model MovieGenre {
+  movie_id Int
+  genre_id Int
+
+  movie    Movie   @relation(fields: [movie_id], references: [movie_id])
+  genre    Genre   @relation(fields: [genre_id], references: [genre_id])
+
+  @@id([movie_id, genre_id])
+}
+
+model Theater {
+  theater_id Int       @id @default(autoincrement())
+  name       String    @db.VarChar(100)
+  address    String    @db.VarChar(200)
+  city       String    @db.VarChar(50)
+  phone      String    @db.VarChar(20)
+
+  studios    Studio[]
+}
+
+model Studio {
+  studio_id   Int         @id @default(autoincrement())
+  theater_id  Int
+  studio_name String      @db.VarChar(50)
+  total_seats Int
+  studio_type StudioType
+
+  theater     Theater     @relation(fields: [theater_id], references: [theater_id])
+  seats       Seat[]
+  showtimes   Showtime[]
+}
+
+model Seat {
+  seat_id     Int      @id @default(autoincrement())
+  studio_id   Int
+  seat_number Int
+  row_letter  String   @db.Char(2)
+  is_blocked  Boolean
+
+  studio      Studio   @relation(fields: [studio_id], references: [studio_id])
+  bookingSeats BookingSeat[]
+}
+
+model Showtime {
+  showtime_id   Int       @id @default(autoincrement())
+  movie_id      Int
+  studio_id     Int
+  show_datetime DateTime
+  price         Int
+  is_active     Boolean   @default(true)
+
+  movie         Movie     @relation(fields: [movie_id], references: [movie_id])
+  studio        Studio    @relation(fields: [studio_id], references: [studio_id])
+  bookings      Booking[]
+  bookingSeats  BookingSeat[]
+}
+
+model Booking {
+  id                Int            @id @default(autoincrement())
+  user_id           Int
+  showtime_id       Int
+  booking_datetime  DateTime       @default(now())
+  booking_status    BookingStatus
+  hold_expires_at   DateTime?
+  total_amount      Int
+  booking_reference String         @unique @db.VarChar(50)
+
+  user              User           @relation(fields: [user_id], references: [id])
+  showtime          Showtime       @relation(fields: [showtime_id], references: [showtime_id])
+  bookingSeats      BookingSeat[]
+  payments          Payment[]
+}
+
+model BookingSeat {
+  booking_seat_id Int      @id @default(autoincrement())
+  booking_id      Int
+  seat_id         Int
+  showtime_id     Int
+  price           Int
+
+  booking         Booking  @relation(fields: [booking_id], references: [id])
+  seat            Seat     @relation(fields: [seat_id], references: [seat_id])
+  showtime        Showtime @relation(fields: [showtime_id], references: [showtime_id])
+}
+
+model Payment {
+  payment_id     Int           @id @default(autoincrement())
+  booking_id     Int
+  amount         Int
+  payment_time   DateTime
+  status         PaymentStatus
+
+  booking        Booking       @relation(fields: [booking_id], references: [id])
+}
