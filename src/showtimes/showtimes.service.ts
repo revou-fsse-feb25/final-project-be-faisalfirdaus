@@ -3,7 +3,7 @@ import {
   BadRequestException,
   NotFoundException,
 } from '@nestjs/common';
-import { Prisma, PrismaClient } from '@prisma/client';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { ShowtimesListQueryDto } from './dto/req/showtimes-list-query.dto';
 import {
@@ -13,20 +13,12 @@ import {
 import { ShowtimeDetailDto } from './dto/res/showtime-detail.dto';
 import { ShowtimeSeatAvailabilityDto } from './dto/res/showtime-seat-availability.dto';
 
-const CI = Prisma.QueryMode.insensitive;
-
 @Injectable()
 export class ShowtimesService {
   constructor(private readonly prisma: PrismaService) {}
 
-  /* -------------------------------------------------------------------------- */
-  /*                                   LISTING                                  */
-  /* -------------------------------------------------------------------------- */
-
   /**
    * GET /showtimes
-   * Filters: movieId, theaterId, city, studioType, dateFrom, dateTo, isActive
-   * Pagination: cursor (showtime_id), limit (default 20)
    */
   async listShowtimes(
     query: ShowtimesListQueryDto,
@@ -37,7 +29,6 @@ export class ShowtimesService {
       throw new BadRequestException('Invalid cursor');
     }
 
-    // Build where with joins for theater/city and studioType
     const where: Prisma.ShowtimeWhereInput = {
       ...(typeof query?.movieId === 'number'
         ? { movie_id: query.movieId }
@@ -46,7 +37,16 @@ export class ShowtimesService {
         ? { studio: { theater_id: query.theaterId } }
         : {}),
       ...(query?.city
-        ? { studio: { theater: { city: { equals: query.city, mode: CI } } } }
+        ? {
+            studio: {
+              theater: {
+                city: {
+                  equals: query.city,
+                  mode: Prisma.QueryMode.insensitive,
+                },
+              },
+            },
+          }
         : {}),
       ...(query?.studioType
         ? { studio: { studio_type: query.studioType as any } }
@@ -104,10 +104,6 @@ export class ShowtimesService {
     };
   }
 
-  /* -------------------------------------------------------------------------- */
-  /*                                   DETAIL                                   */
-  /* -------------------------------------------------------------------------- */
-
   /**
    * GET /showtimes/:showtimeId
    */
@@ -146,28 +142,18 @@ export class ShowtimesService {
     return dto;
   }
 
-  /* -------------------------------------------------------------------------- */
-  /*                              SEAT AVAILABILITY                              */
-  /* -------------------------------------------------------------------------- */
-
   /**
    * GET /showtimes/:showtimeId/seats
-   * Status per seat: BLOCKED | BOOKED | HELD | AVAILABLE
-   * - BLOCKED: Seat.is_blocked = true
-   * - BOOKED: seat has BookingSeat where parent Booking.status in (Confirmed, Claimed)
-   * - HELD:   seat has BookingSeat with Booking.status = Pending AND hold_expires_at > now()
    */
   async getShowtimeSeatAvailability(
     showtimeId: number,
   ): Promise<ShowtimeSeatAvailabilityDto[]> {
-    // Load showtime & its studio id
     const showtime = await this.prisma.showtime.findUnique({
       where: { showtime_id: showtimeId },
       select: { showtime_id: true, studio_id: true },
     });
     if (!showtime) throw new NotFoundException('Showtime not found');
 
-    // 1) All seats in the studio (static layout)
     const seats = await this.prisma.seat.findMany({
       where: { studio_id: showtime.studio_id },
       orderBy: [{ row_letter: 'asc' }, { seat_number: 'asc' }],
@@ -179,7 +165,6 @@ export class ShowtimesService {
       },
     });
 
-    // 2) Booking seats for this showtime that are either BOOKED or HELD (not expired)
     const now = new Date();
     const bookingSeats = await this.prisma.bookingSeat.findMany({
       where: {
@@ -198,7 +183,7 @@ export class ShowtimesService {
     });
 
     const bookedSet = new Set<number>();
-    const heldMap = new Map<number, Date>(); // seat_id -> hold_expires_at
+    const heldMap = new Map<number, Date>();
 
     for (const bs of bookingSeats) {
       const status = bs.booking.booking_status;
@@ -209,21 +194,19 @@ export class ShowtimesService {
         bs.booking.hold_expires_at &&
         bs.booking.hold_expires_at > now
       ) {
-        // Do not mark as held if already booked (booked has precedence)
         if (!bookedSet.has(bs.seat_id)) {
           heldMap.set(bs.seat_id, bs.booking.hold_expires_at);
         }
       }
     }
 
-    // 3) Merge statuses
-    const result: ShowtimeSeatAvailabilityDto[] = seats.map((s) => {
+    return seats.map((s) => {
       if (s.is_blocked) {
         return {
           seat_id: s.seat_id,
           row: s.row_letter,
           number: s.seat_number,
-          status: 'BLOCKED',
+          status: 'BLOCKED' as const,
         };
       }
       if (bookedSet.has(s.seat_id)) {
@@ -231,7 +214,7 @@ export class ShowtimesService {
           seat_id: s.seat_id,
           row: s.row_letter,
           number: s.seat_number,
-          status: 'BOOKED',
+          status: 'BOOKED' as const,
         };
       }
       const held = heldMap.get(s.seat_id);
@@ -240,7 +223,7 @@ export class ShowtimesService {
           seat_id: s.seat_id,
           row: s.row_letter,
           number: s.seat_number,
-          status: 'HELD',
+          status: 'HELD' as const,
           hold_expires_at: held.toISOString(),
         };
       }
@@ -248,22 +231,14 @@ export class ShowtimesService {
         seat_id: s.seat_id,
         row: s.row_letter,
         number: s.seat_number,
-        status: 'AVAILABLE',
+        status: 'AVAILABLE' as const,
       };
     });
-
-    return result;
   }
 
-  /* -------------------------------------------------------------------------- */
-  /*                                 ADMIN CRUD                                 */
-  /* -------------------------------------------------------------------------- */
+  /* ------------------------------- ADMIN CRUD ------------------------------- */
 
-  /**
-   * POST /showtimes
-   */
   async createShowtime(body: CreateShowtimeDto): Promise<ShowtimeDetailDto> {
-    // Validate movie & studio exist
     const [movie, studio] = await Promise.all([
       this.prisma.movie.findUnique({
         where: { movie_id: body.movie_id },
@@ -312,21 +287,16 @@ export class ShowtimesService {
     };
   }
 
-  /**
-   * PATCH /showtimes/:showtimeId
-   */
   async updateShowtime(
     showtimeId: number,
     body: UpdateShowtimeDto,
   ): Promise<ShowtimeDetailDto> {
-    // Ensure exists
     const exists = await this.prisma.showtime.findUnique({
       where: { showtime_id: showtimeId },
       select: { showtime_id: true },
     });
     if (!exists) throw new NotFoundException('Showtime not found');
 
-    // If moving movie_id/studio_id, validate targets exist
     if (typeof body.movie_id === 'number') {
       const m = await this.prisma.movie.findUnique({
         where: { movie_id: body.movie_id },
@@ -381,11 +351,6 @@ export class ShowtimesService {
     };
   }
 
-  /**
-   * DELETE /showtimes/:showtimeId
-   * If bookings exist for this showtime, we soft-disable it (is_active=false).
-   * Otherwise, delete the row.
-   */
   async deleteShowtime(showtimeId: number): Promise<{ deleted: boolean }> {
     const existing = await this.prisma.showtime.findUnique({
       where: { showtime_id: showtimeId },
@@ -412,7 +377,6 @@ export class ShowtimesService {
 /* --------------------------------- helpers --------------------------------- */
 
 function startOfDayUTC(dateStr: string): Date {
-  // Accepts 'YYYY-MM-DD' or ISO; normalizes to 00:00:00Z
   const d = new Date(dateStr);
   return new Date(
     Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), 0, 0, 0, 0),
@@ -420,7 +384,6 @@ function startOfDayUTC(dateStr: string): Date {
 }
 
 function endOfDayUTC(dateStr: string): Date {
-  // Normalizes to 23:59:59.999Z
   const d = new Date(dateStr);
   return new Date(
     Date.UTC(

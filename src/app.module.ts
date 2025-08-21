@@ -10,6 +10,8 @@ import { ShowtimesModule } from './showtimes/showtimes.module';
 import { PaymentsModule } from './payments/payments.module';
 import { ConfigModule } from '@nestjs/config';
 import { PrismaModule } from './prisma/prisma.module';
+import { WebhooksModule } from './webhooks/webhooks.module';
+import { GenresModule } from './genres/genres.module';
 
 @Module({
   imports: [
@@ -24,6 +26,8 @@ import { PrismaModule } from './prisma/prisma.module';
       isGlobal: true,
     }),
     PrismaModule,
+    WebhooksModule,
+    GenresModule,
   ],
   controllers: [AppController],
   providers: [AppService],

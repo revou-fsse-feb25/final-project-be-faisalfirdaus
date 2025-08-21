@@ -17,8 +17,6 @@ import {
 import { CreateStudioDto, UpdateStudioDto } from './dto/req/create-studio.dto';
 import { BlockSeatsDto } from './dto/req/block-seats.dto';
 
-const CI = Prisma.QueryMode.insensitive;
-
 @Injectable()
 export class TheatersService {
   constructor(private readonly prisma: PrismaService) {}
@@ -32,12 +30,21 @@ export class TheatersService {
     query: TheatersListQueryDto,
   ): Promise<TheaterListItemDto[]> {
     const where: Prisma.TheaterWhereInput = {
-      ...(query.city ? { city: { equals: query.city, mode: CI } } : {}),
+      ...(query.city
+        ? { city: { equals: query.city, mode: Prisma.QueryMode.insensitive } }
+        : {}),
       ...(query.q
         ? {
             OR: [
-              { name: { contains: query.q, mode: CI } },
-              { address: { contains: query.q, mode: CI } },
+              {
+                name: { contains: query.q, mode: Prisma.QueryMode.insensitive },
+              },
+              {
+                address: {
+                  contains: query.q,
+                  mode: Prisma.QueryMode.insensitive,
+                },
+              },
             ],
           }
         : {}),
@@ -145,9 +152,6 @@ export class TheatersService {
 
   /* --------------------------- Admin: Theaters CRUD -------------------------- */
 
-  /**
-   * POST /theaters
-   */
   async createTheater(body: CreateTheaterDto): Promise<TheaterDetailDto> {
     const created = await this.prisma.theater.create({
       data: {
@@ -169,9 +173,6 @@ export class TheatersService {
     };
   }
 
-  /**
-   * PATCH /theaters/:theaterId
-   */
   async updateTheater(
     theaterId: number,
     body: UpdateTheaterDto,
@@ -204,10 +205,6 @@ export class TheatersService {
     };
   }
 
-  /**
-   * DELETE /theaters/:theaterId
-   * Safety: refuse delete if theater has studios.
-   */
   async deleteTheater(theaterId: number): Promise<{ deleted: boolean }> {
     const countStudios = await this.prisma.studio.count({
       where: { theater_id: theaterId },
@@ -227,9 +224,6 @@ export class TheatersService {
 
   /* ---------------------- Admin: Studios CRUD & blocking --------------------- */
 
-  /**
-   * POST /theaters/:theaterId/studios
-   */
   async createStudio(
     theaterId: number,
     body: CreateStudioDto,
@@ -267,9 +261,6 @@ export class TheatersService {
     };
   }
 
-  /**
-   * PATCH /studios/:studioId
-   */
   async updateStudio(
     studioId: number,
     body: UpdateStudioDto,
@@ -306,12 +297,6 @@ export class TheatersService {
     };
   }
 
-  /**
-   * DELETE /studios/:studioId
-   * Safety:
-   *  - refuse delete if studio has showtimes
-   *  - if safe, remove seats then the studio in one transaction
-   */
   async deleteStudio(studioId: number): Promise<{ deleted: boolean }> {
     const showtimeCount = await this.prisma.showtime.count({
       where: { studio_id: studioId },
@@ -334,10 +319,6 @@ export class TheatersService {
     return { deleted: true };
   }
 
-  /**
-   * POST /studios/:studioId/seats/block
-   * Bulk block/unblock by row + numbers.
-   */
   async blockSeats(
     studioId: number,
     body: BlockSeatsDto,

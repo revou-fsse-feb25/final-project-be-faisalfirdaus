@@ -1,113 +1,179 @@
 import {
-  Injectable,
-  ForbiddenException,
-  NotFoundException,
   BadRequestException,
+  ForbiddenException,
+  Injectable,
+  NotFoundException,
 } from '@nestjs/common';
-import { PrismaService } from '../prisma/prisma.service';
-import { CreatePaymentDto } from './dto/req/create-payment.dto';
-import { PaymentStatus, BookingStatus } from '@prisma/client';
-import { PaymentResponseDto } from './dto/res/payment-response.dto';
-import {
-  GatewayPaymentStatus,
-  PaymentWebhookDto,
-} from './dto/req/payment-webhook.dto';
+import { Prisma, PaymentStatus, BookingStatus } from '@prisma/client';
+import { PrismaService } from 'src/prisma/prisma.service';
+import { User } from 'src/users/entities/user.entity';
+import { CreatePaymentAttemptDto } from './dto/req/create-payment.dto';
+import { PaymentListItemDto } from './dto/res/payment-list-item.dto';
 
 @Injectable()
 export class PaymentsService {
-  constructor(private prisma: PrismaService) {}
+  constructor(private readonly prisma: PrismaService) {}
 
-  async createPaymentIntent(
-    bookingId: number,
-    userId: number,
-    dto: CreatePaymentDto,
-  ): Promise<PaymentResponseDto> {
-    const booking = await this.prisma.booking.findUnique({
-      where: { id: bookingId },
-    });
+  /**
+   * POST /bookings/:bookingReference/payments
+   * Create a new payment attempt for the remaining amount.
+   * Returns a redirect URL (stub) and the created paymentId.
+   */
+  async createPaymentAttempt(
+    user: User,
+    bookingReference: string,
+    _body: CreatePaymentAttemptDto,
+  ): Promise<{ redirectUrl: string; paymentId: number }> {
+    const booking = await this.getBookingForUser(user, bookingReference);
 
-    if (!booking) throw new NotFoundException('Booking not found');
-    if (booking.user_id !== userId)
-      throw new ForbiddenException('Not your booking');
-
-    if (booking.booking_status !== BookingStatus.Pending)
-      throw new BadRequestException('Booking is not pending');
-
-    if (booking.hold_expires_at && booking.hold_expires_at < new Date())
-      throw new BadRequestException('Booking expired');
-
-    if (dto.amount !== booking.total_amount)
-      throw new BadRequestException('Invalid amount');
-
-    const payment = await this.prisma.payment.create({
-      data: {
-        booking_id: bookingId,
-        amount: dto.amount,
-        payment_time: new Date(),
-        status: PaymentStatus.Delayed,
-      },
-    });
-
-    return {
-      payment_id: payment.payment_id,
-      booking_id: payment.booking_id,
-      amount: payment.amount,
-      payment_time: payment.payment_time,
-      status: payment.status,
-      client_secret: 'mock-client-secret',
-      redirect_url: 'https://mock-gateway/checkout',
-    };
-  }
-
-  async handleWebhook(dto: PaymentWebhookDto, signature: string) {
-    // TODO: verify signature with your payment gateway SDK
-    if (!signature) throw new ForbiddenException('Missing signature');
-
-    const updated = await this.prisma.payment.updateMany({
-      where: {
-        booking_id: dto.bookingId,
-      },
-      data: {
-        status:
-          dto.status === GatewayPaymentStatus.Success
-            ? PaymentStatus.Success
-            : PaymentStatus.Failed,
-      },
-    });
-
-    if (dto.status === GatewayPaymentStatus.Success && updated.count > 0) {
-      await this.prisma.booking.update({
-        where: { id: dto.bookingId },
-        data: { booking_status: BookingStatus.Confirmed },
-      });
+    // Basic policy: do not accept payments for cancelled/expired
+    if (
+      booking.booking_status === BookingStatus.Cancelled ||
+      booking.booking_status === BookingStatus.Expired
+    ) {
+      throw new BadRequestException('BOOKING_CLOSED');
     }
 
-    return { received: true };
+    const remaining = await this.getRemainingAmount(
+      booking.id,
+      booking.total_amount,
+    );
+    if (remaining <= 0) {
+      throw new BadRequestException('ALREADY_PAID');
+    }
+
+    // Create a payment attempt (Delayed == awaiting gateway)
+    const payment = await this.prisma.payment.create({
+      data: {
+        booking_id: booking.id,
+        amount: remaining,
+        payment_time: new Date(), // created-at timestamp
+        status: PaymentStatus.Delayed,
+      },
+      select: { payment_id: true },
+    });
+
+    // TODO: integrate PSP here (create checkout session), store PSP ref if schema allows
+    const redirectUrl = this.buildRedirectUrl(
+      bookingReference,
+      payment.payment_id,
+    );
+
+    return { redirectUrl, paymentId: payment.payment_id };
   }
 
-  async listPayments(
-    bookingId: number,
-    userId: number,
-    isAdmin: boolean,
-  ): Promise<PaymentResponseDto[]> {
-    const booking = await this.prisma.booking.findUnique({
-      where: { id: bookingId },
-    });
-    if (!booking) throw new NotFoundException('Booking not found');
-
-    if (!isAdmin && booking.user_id !== userId)
-      throw new ForbiddenException('Not your booking');
+  /**
+   * GET /bookings/:bookingReference/payments
+   */
+  async listPaymentAttempts(
+    user: User,
+    bookingReference: string,
+  ): Promise<PaymentListItemDto[]> {
+    const booking = await this.getBookingForUser(user, bookingReference);
 
     const payments = await this.prisma.payment.findMany({
-      where: { booking_id: bookingId },
+      where: { booking_id: booking.id },
+      orderBy: { payment_time: 'desc' },
+      select: {
+        payment_id: true,
+        amount: true,
+        payment_time: true,
+        status: true,
+      },
     });
 
     return payments.map((p) => ({
       payment_id: p.payment_id,
-      booking_id: p.booking_id,
       amount: p.amount,
-      payment_time: p.payment_time,
+      payment_time: p.payment_time.toISOString(),
       status: p.status,
     }));
+  }
+
+  /**
+   * POST /bookings/:bookingReference/payments/retry
+   * Allows creating a new attempt if not fully paid yet.
+   */
+  async retryPaymentAttempt(
+    user: User,
+    bookingReference: string,
+  ): Promise<{ redirectUrl: string; paymentId: number }> {
+    const booking = await this.getBookingForUser(user, bookingReference);
+
+    if (
+      booking.booking_status === BookingStatus.Cancelled ||
+      booking.booking_status === BookingStatus.Expired
+    ) {
+      throw new BadRequestException('BOOKING_CLOSED');
+    }
+
+    const remaining = await this.getRemainingAmount(
+      booking.id,
+      booking.total_amount,
+    );
+    if (remaining <= 0) {
+      throw new BadRequestException('ALREADY_PAID');
+    }
+
+    const payment = await this.prisma.payment.create({
+      data: {
+        booking_id: booking.id,
+        amount: remaining,
+        payment_time: new Date(),
+        status: PaymentStatus.Delayed,
+      },
+      select: { payment_id: true },
+    });
+
+    const redirectUrl = this.buildRedirectUrl(
+      bookingReference,
+      payment.payment_id,
+    );
+    return { redirectUrl, paymentId: payment.payment_id };
+  }
+
+  /* --------------------------------- helpers -------------------------------- */
+
+  private async getBookingForUser(user: User, bookingReference: string) {
+    const booking = await this.prisma.booking.findUnique({
+      where: { booking_reference: bookingReference },
+      select: {
+        id: true,
+        user_id: true,
+        total_amount: true,
+        booking_status: true,
+      },
+    });
+    if (!booking) throw new NotFoundException('BOOKING_NOT_FOUND');
+    if (booking.user_id !== user.id && user.role !== 'ADMIN') {
+      throw new ForbiddenException();
+    }
+    return booking;
+  }
+
+  /** Compute remaining amount: total - sum(success payments) */
+  private async getRemainingAmount(
+    bookingId: number,
+    totalAmount: number,
+  ): Promise<number> {
+    const agg = await this.prisma.payment.aggregate({
+      _sum: { amount: true },
+      where: { booking_id: bookingId, status: PaymentStatus.Success },
+    });
+
+    const paid = agg._sum.amount ?? 0;
+    return Math.max(totalAmount - paid, 0);
+  }
+
+  /** Stub redirect URL builder; replace with your PSP checkout session URL */
+  private buildRedirectUrl(
+    bookingReference: string,
+    paymentId: number,
+  ): string {
+    // In real life, create a PSP session and return its url.
+    // Keep this deterministic for now:
+    return `https://payments.example/checkout?booking=${encodeURIComponent(
+      bookingReference,
+    )}&pid=${paymentId}`;
   }
 }

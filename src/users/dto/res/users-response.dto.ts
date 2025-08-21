@@ -1,8 +1,10 @@
+import { ApiProperty } from '@nestjs/swagger';
+
 export class UsersResponseDto {
-  id: number;
-  email: string;
-  role: string;
-  username: string;
-  phone: string;
-  created_at: Date;
+  @ApiProperty() id: number;
+  @ApiProperty() username: string;
+  @ApiProperty() email: string;
+  @ApiProperty() phone: string;
+  @ApiProperty({ enum: ['USER', 'ADMIN'] }) role: 'USER' | 'ADMIN';
+  @ApiProperty() created_at: Date;
 }

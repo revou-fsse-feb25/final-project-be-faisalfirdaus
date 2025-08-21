@@ -1,26 +1,32 @@
+import { ApiProperty } from '@nestjs/swagger';
 import {
   IsEmail,
-  IsEnum,
-  IsNotEmpty,
-  IsPhoneNumber,
+  IsOptional,
   IsString,
+  MinLength,
+  MaxLength,
 } from 'class-validator';
 
 export class RegisterAuthDto {
-  @IsString()
-  @IsNotEmpty()
-  username: string;
-
+  @ApiProperty({ example: 'alice@example.com' })
   @IsEmail()
-  @IsNotEmpty()
   email: string;
 
+  @ApiProperty({ example: 'alice' })
   @IsString()
-  @IsNotEmpty()
+  @MinLength(3)
+  @MaxLength(100)
+  username: string;
+
+  @ApiProperty({ example: 'Str0ngP@ssw0rd!' })
+  @IsString()
+  @MinLength(8)
+  @MaxLength(255)
   password: string;
 
+  @ApiProperty({ example: '+628123456789', required: false, nullable: true })
+  @IsOptional()
   @IsString()
-  @IsNotEmpty()
-  @IsPhoneNumber('ID', { message: 'Invalid phone number format' })
-  phone: string;
+  @MaxLength(20)
+  phone?: string | null;
 }

@@ -1,61 +1,57 @@
-import {
-  Controller,
-  Post,
-  Body,
-  Param,
-  Req,
-  Get,
-  Headers,
-  UseGuards,
-} from '@nestjs/common';
+import { Body, Controller, Get, Param, Post, UseGuards } from '@nestjs/common';
+import { ApiBearerAuth, ApiOkResponse, ApiTags } from '@nestjs/swagger';
 import { PaymentsService } from './payments.service';
-import { CreatePaymentDto } from './dto/req/create-payment.dto';
-import { PaymentResponseDto } from './dto/res/payment-response.dto';
-import { PaymentWebhookDto } from './dto/req/payment-webhook.dto';
 import { JwtAuthGuard } from 'src/common/guards/jwt-auth.guard';
+import { RolesGuard } from 'src/common/guards/roles.guard';
+import { CurrentUser } from 'src/common/decorator/current-user.decorator';
+import { User } from 'src/users/entities/user.entity';
+import { CreatePaymentAttemptDto } from './dto/req/create-payment.dto';
+import { PaymentListItemDto } from './dto/res/payment-list-item.dto';
 
-@Controller()
+@ApiTags('payments')
+@ApiBearerAuth()
+@UseGuards(JwtAuthGuard, RolesGuard)
+@Controller('bookings/:bookingReference/payments')
 export class PaymentsController {
   constructor(private readonly paymentsService: PaymentsService) {}
 
-  // POST /bookings/:id/payments
-  @UseGuards(JwtAuthGuard)
-  @Post('bookings/:id/payments')
-  async createPayment(
-    @Param('id') bookingId: string,
-    @Body() body: CreatePaymentDto,
-    @Req() req: any,
-  ): Promise<PaymentResponseDto> {
-    const userId = req.user.id;
-    return this.paymentsService.createPaymentIntent(
-      parseInt(bookingId, 10),
-      userId,
+  @Post()
+  @ApiOkResponse({
+    schema: {
+      example: { redirectUrl: 'https://pay.example/…', paymentId: 123 },
+    },
+  })
+  createPaymentAttempt(
+    @Param('bookingReference') bookingReference: string,
+    @CurrentUser() user: User,
+    @Body() body: CreatePaymentAttemptDto,
+  ): Promise<any> {
+    return this.paymentsService.createPaymentAttempt(
+      user,
+      bookingReference,
       body,
     );
   }
 
-  // POST /payments/webhook (public, signed)
-  @Post('payments/webhook')
-  async handleWebhook(
-    @Body() dto: PaymentWebhookDto,
-    @Headers('x-signature') signature: string,
-  ) {
-    return this.paymentsService.handleWebhook(dto, signature);
+  @Get()
+  @ApiOkResponse({ type: PaymentListItemDto, isArray: true })
+  listPaymentAttempts(
+    @Param('bookingReference') bookingReference: string,
+    @CurrentUser() user: User,
+  ): Promise<PaymentListItemDto[]> {
+    return this.paymentsService.listPaymentAttempts(user, bookingReference);
   }
 
-  // GET /bookings/:id/payments
-  @UseGuards(JwtAuthGuard)
-  @Get('bookings/:id/payments')
-  async getPayments(
-    @Param('id') bookingId: string,
-    @Req() req: any,
-  ): Promise<PaymentResponseDto[]> {
-    const userId = req.user.id;
-    const isAdmin = req.user.role === 'ADMIN';
-    return this.paymentsService.listPayments(
-      parseInt(bookingId, 10),
-      userId,
-      isAdmin,
-    );
+  @Post('retry')
+  @ApiOkResponse({
+    schema: {
+      example: { redirectUrl: 'https://pay.example/…', paymentId: 124 },
+    },
+  })
+  retryPaymentAttempt(
+    @Param('bookingReference') bookingReference: string,
+    @CurrentUser() user: User,
+  ): Promise<any> {
+    return this.paymentsService.retryPaymentAttempt(user, bookingReference);
   }
 }

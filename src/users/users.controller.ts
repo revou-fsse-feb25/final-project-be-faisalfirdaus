@@ -1,4 +1,5 @@
 import { Controller, Get, Body, Patch, UseGuards } from '@nestjs/common';
+import { ApiBearerAuth, ApiOkResponse, ApiTags } from '@nestjs/swagger';
 import { UsersService } from './users.service';
 import { UpdateUserDto } from './dto/req/update-user.dto';
 import { CurrentUser } from 'src/common/decorator/current-user.decorator';
@@ -8,6 +9,8 @@ import { Roles } from 'src/common/decorator/roles.decorator';
 import { User } from './entities/user.entity';
 import { UsersResponseDto } from './dto/res/users-response.dto';
 
+@ApiTags('users')
+@ApiBearerAuth()
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Controller('users')
 export class UsersController {
@@ -15,19 +18,19 @@ export class UsersController {
 
   @Roles('ADMIN')
   @Get()
-  getAllUsers() // @Query('search') search?: string,
-  // @Query('limit', ParseIntPipe) limit?: number,
-  : Promise<UsersResponseDto[]> {
+  @ApiOkResponse({ type: UsersResponseDto, isArray: true })
+  getAllUsers(): Promise<UsersResponseDto[]> {
     return this.usersService.getAllUsers();
   }
 
   @Get('profile')
+  @ApiOkResponse({ type: UsersResponseDto })
   getUserProfile(@CurrentUser() user: User): Promise<UsersResponseDto> {
-    console.log(user);
     return this.usersService.getUserProfile(user);
   }
 
   @Patch('profile')
+  @ApiOkResponse({ type: UsersResponseDto })
   updateUserProfile(
     @CurrentUser() user: User,
     @Body() body: UpdateUserDto,

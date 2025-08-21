@@ -1,16 +1,9 @@
-import { IsEnum, IsNumber, IsString, IsIn } from 'class-validator';
+import { ApiPropertyOptional } from '@nestjs/swagger';
+import { IsOptional, IsString } from 'class-validator';
 
-export class CreatePaymentDto {
+export class CreatePaymentAttemptDto {
+  @ApiPropertyOptional({ description: 'Payment provider (if multiple)' })
+  @IsOptional()
   @IsString()
-  @IsIn(['CARD', 'VA', 'EWALLET'], {
-    message: 'method must be one of CARD, VA, EWALLET',
-  })
-  method: 'CARD' | 'VA' | 'EWALLET';
-
-  @IsNumber()
-  amount: number;
-
-  @IsString()
-  @IsIn(['IDR'], { message: 'Only IDR is supported right now' })
-  currency: 'IDR';
+  provider?: string; // e.g. 'xendit'
 }
