@@ -1,12 +1,12 @@
-// src/movies/dto/res/movie-detail-response.dto.ts
-import { MovieStatus } from '../req/movies-list-query.dto';
-
+import { ApiProperty } from '@nestjs/swagger';
 export class MovieDetailResponseDto {
-  id: string;
-  title: string;
-  synopsis: string;
-  posterUrl: string;
-  runtimeMinutes: number;
-  status: MovieStatus;
-  genres: string[];
+  @ApiProperty() movie_id: number;
+  @ApiProperty() title: string;
+  @ApiProperty() description: string;
+  @ApiProperty() duration_minutes: number;
+  @ApiProperty() poster_url: string;
+  @ApiProperty({ enum: ['COMING_SOON', 'NOW_SHOWING', 'ARCHIVED'] })
+  status: string;
+  @ApiProperty() is_active: boolean;
+  @ApiProperty({ type: String, isArray: true }) genres: string[];
 }

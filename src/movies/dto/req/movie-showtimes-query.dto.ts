@@ -1,16 +1,7 @@
-// src/movies/dto/req/movie-showtimes-query.dto.ts
-import { IsDateString, IsOptional, IsString } from 'class-validator';
-import { Type } from 'class-transformer';
-
+import { ApiProperty } from '@nestjs/swagger';
+import { IsISO8601 } from 'class-validator';
 export class MovieShowtimesQueryDto {
-  @IsDateString()
-  date!: string; // required, format YYYY-MM-DD
-
-  @IsOptional()
-  @IsString()
-  city?: string;
-
-  @IsOptional()
-  @Type(() => Number)
-  theaterId?: string;
+  @ApiProperty({ example: '2025-08-21' })
+  @IsISO8601({ strict: true })
+  date: string;
 }

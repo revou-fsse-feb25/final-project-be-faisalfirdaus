@@ -1,15 +1,14 @@
-// src/movies/dto/res/movie-showtimes-response.dto.ts
-
-export class MovieShowtimeEntryDto {
-  showtimeId!: string;
-  timeHHmm!: string;
-  studioName!: string;
-  studioType!: string; // 'Regular' | 'IMAX' | 'Premier'
-  price!: number;
+import { ApiProperty } from '@nestjs/swagger';
+class TheaterShowtimeEntryDto {
+  @ApiProperty() showtimeId: number;
+  @ApiProperty() timeHHmm: string;
+  @ApiProperty() studioName: string;
+  @ApiProperty({ enum: ['Regular', 'IMAX', 'Premier'] }) studioType: string;
+  @ApiProperty() price: number;
 }
-
 export class MovieShowtimesResponseDto {
-  theaterId!: string;
-  theaterName!: string;
-  entries!: MovieShowtimeEntryDto[];
+  @ApiProperty() theater_id: number;
+  @ApiProperty() theater_name: string;
+  @ApiProperty({ type: TheaterShowtimeEntryDto, isArray: true })
+  entries: TheaterShowtimeEntryDto[];
 }

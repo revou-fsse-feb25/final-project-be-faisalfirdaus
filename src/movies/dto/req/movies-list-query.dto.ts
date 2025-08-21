@@ -1,39 +1,44 @@
 // src/movies/dto/req/movies-list-query.dto.ts
-import { IsEnum, IsInt, IsOptional, IsString, Min } from 'class-validator';
+import { ApiPropertyOptional } from '@nestjs/swagger';
+import {
+  IsBooleanString,
+  IsEnum,
+  IsInt,
+  IsOptional,
+  IsString,
+  Min,
+} from 'class-validator';
 import { Type } from 'class-transformer';
-
-export enum MovieStatus {
+export enum MovieStatusDto {
   COMING_SOON = 'COMING_SOON',
   NOW_SHOWING = 'NOW_SHOWING',
   ARCHIVED = 'ARCHIVED',
 }
 
 export class MoviesListQueryDto {
+  @ApiPropertyOptional({ enum: MovieStatusDto })
   @IsOptional()
-  @IsEnum(MovieStatus)
-  status?: MovieStatus;
+  @IsEnum(MovieStatusDto)
+  status?: MovieStatusDto;
 
-  @IsOptional()
-  @IsString()
-  q?: string;
-
+  @ApiPropertyOptional() @IsOptional() @IsBooleanString() isActive?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() q?: string;
+  @ApiPropertyOptional()
   @IsOptional()
   @Type(() => Number)
   @IsInt()
   @Min(1)
   genreId?: number;
 
-  @IsOptional()
-  @IsString()
-  city?: string;
-
-  @IsOptional()
-  @IsString()
-  cursor?: string;
-
+  @ApiPropertyOptional()
   @IsOptional()
   @Type(() => Number)
   @IsInt()
   @Min(1)
-  limit?: number = 25;
+  limit?: number;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  cursor?: string;
 }
