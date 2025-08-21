@@ -1,262 +1,384 @@
-// src/theaters/theaters.service.ts
-import { Injectable, NotFoundException } from '@nestjs/common';
+import {
+  Injectable,
+  BadRequestException,
+  NotFoundException,
+} from '@nestjs/common';
+import { Prisma, StudioType } from '@prisma/client';
+import { PrismaService } from 'src/prisma/prisma.service';
 import { TheatersListQueryDto } from './dto/req/theaters-list-query.dto';
 import { TheaterListItemDto } from './dto/res/theater-list-item.dto';
-import {
-  TheaterDetailDto,
-  TheaterDetailStudioDto,
-} from './dto/res/theater-detail.dto';
+import { TheaterDetailDto } from './dto/res/theater-detail.dto';
 import { StudioDetailDto } from './dto/res/studio-detail.dto';
 import { SeatLayoutItemDto } from './dto/res/seat-layout-item.dto';
+import {
+  CreateTheaterDto,
+  UpdateTheaterDto,
+} from './dto/req/create-theater.dto';
+import { CreateStudioDto, UpdateStudioDto } from './dto/req/create-studio.dto';
+import { BlockSeatsDto } from './dto/req/block-seats.dto';
 
-type Theater = {
-  theaterId: number;
-  name: string;
-  address: string;
-  city: string;
-  phone: string;
-};
-
-type StudioType = 'Regular' | 'IMAX' | 'Premier';
-
-type Studio = {
-  studioId: number;
-  theaterId: number;
-  studioName: string;
-  totalSeats: number;
-  studioType: StudioType;
-};
-
-type Seat = {
-  seatId: number;
-  studioId: number;
-  rowLetter: string; // "A", "B", ...
-  seatNumber: number; // 1..N
-  isBlocked: boolean; // static layout block (pillar/broken seat/etc.)
-};
+const CI = Prisma.QueryMode.insensitive;
 
 @Injectable()
 export class TheatersService {
-  // ===== Dummy Data =====
-  private readonly theaters: Theater[] = [
-    {
-      theaterId: 100,
-      name: 'Jakarta Central Cinema',
-      address: 'Jl. Merdeka 1',
-      city: 'Jakarta',
-      phone: '021-1111',
-    },
-    {
-      theaterId: 200,
-      name: 'Bandung Premiere',
-      address: 'Jl. Braga 10',
-      city: 'Bandung',
-      phone: '022-2222',
-    },
-    {
-      theaterId: 300,
-      name: 'Surabaya Grand Screen',
-      address: 'Jl. Pemuda 88',
-      city: 'Surabaya',
-      phone: '031-3333',
-    },
-  ];
+  constructor(private readonly prisma: PrismaService) {}
 
-  private readonly studios: Studio[] = [
-    {
-      studioId: 1001,
-      theaterId: 100,
-      studioName: 'Studio 1',
-      totalSeats: 150,
-      studioType: 'Regular',
-    },
-    {
-      studioId: 1002,
-      theaterId: 100,
-      studioName: 'IMAX 1',
-      totalSeats: 220,
-      studioType: 'IMAX',
-    },
-    {
-      studioId: 2001,
-      theaterId: 200,
-      studioName: 'Premier A',
-      totalSeats: 80,
-      studioType: 'Premier',
-    },
-    {
-      studioId: 3001,
-      theaterId: 300,
-      studioName: 'Studio A',
-      totalSeats: 120,
-      studioType: 'Regular',
-    },
-  ];
+  /* -------------------------- Public READ endpoints -------------------------- */
 
   /**
-   * Static seat layouts per studio (dummy). If you prefer, you can generate
-   * the grid at runtime with a helper. Here we precompute for simplicity.
-   */
-  private readonly seats: Seat[] = this.makeSeatLayouts();
-
-  // ===== Public API =====
-
-  /**
-   * GET /v1/theaters?city=Jakarta
+   * GET /theaters
    */
   async listTheaters(
     query: TheatersListQueryDto,
   ): Promise<TheaterListItemDto[]> {
-    const city = query.city?.trim().toLowerCase();
+    const where: Prisma.TheaterWhereInput = {
+      ...(query.city ? { city: { equals: query.city, mode: CI } } : {}),
+      ...(query.q
+        ? {
+            OR: [
+              { name: { contains: query.q, mode: CI } },
+              { address: { contains: query.q, mode: CI } },
+            ],
+          }
+        : {}),
+    };
 
-    const items = this.theaters
-      .filter((t) => !city || t.city.toLowerCase() === city)
-      .map<TheaterListItemDto>((t) => ({
-        theaterId: String(t.theaterId),
-        name: t.name,
-        address: t.address,
-        city: t.city,
-        phone: t.phone,
-      }));
+    const theaters = await this.prisma.theater.findMany({
+      where,
+      orderBy: [{ city: 'asc' }, { name: 'asc' }],
+      select: {
+        theater_id: true,
+        name: true,
+        address: true,
+        city: true,
+        phone: true,
+      },
+    });
 
-    return items;
+    return theaters.map((t) => ({
+      theater_id: t.theater_id,
+      name: t.name,
+      address: t.address,
+      city: t.city,
+      phone: t.phone,
+    }));
   }
 
   /**
-   * GET /v1/theaters/:theaterId
-   * Includes studio list for the theater.
+   * GET /theaters/:theaterId
    */
   async getTheaterById(theaterId: number): Promise<TheaterDetailDto> {
-    const theater = this.theaters.find((t) => t.theaterId === theaterId);
+    const theater = await this.prisma.theater.findUnique({
+      where: { theater_id: theaterId },
+      include: {
+        studios: { select: { studio_id: true }, orderBy: { studio_id: 'asc' } },
+      },
+    });
     if (!theater) throw new NotFoundException('Theater not found');
 
-    const studios = this.studios
-      .filter((s) => s.theaterId === theater.theaterId)
-      .map<TheaterDetailStudioDto>((s) => ({
-        studioId: String(s.studioId),
-        studioName: s.studioName,
-        studioType: s.studioType,
-        totalSeats: s.totalSeats,
-      }));
-
     return {
-      theaterId: String(theater.theaterId),
+      theater_id: theater.theater_id,
       name: theater.name,
       address: theater.address,
       city: theater.city,
       phone: theater.phone,
-      studios,
+      studio_ids: theater.studios.map((s) => s.studio_id),
     };
   }
 
   /**
-   * GET /v1/studios/:studioId
+   * GET /studios/:studioId
    */
   async getStudioById(studioId: number): Promise<StudioDetailDto> {
-    const studio = this.studios.find((s) => s.studioId === studioId);
+    const studio = await this.prisma.studio.findUnique({
+      where: { studio_id: studioId },
+      select: {
+        studio_id: true,
+        theater_id: true,
+        studio_name: true,
+        total_seats: true,
+        studio_type: true,
+      },
+    });
     if (!studio) throw new NotFoundException('Studio not found');
-
-    const theater = this.theaters.find(
-      (t) => t.theaterId === studio.theaterId,
-    )!;
 
     return {
-      studioId: String(studio.studioId),
-      theaterId: String(theater.theaterId),
-      theaterName: theater.name,
-      city: theater.city,
-      studioName: studio.studioName,
-      studioType: studio.studioType,
-      totalSeats: studio.totalSeats,
+      studio_id: studio.studio_id,
+      theater_id: studio.theater_id,
+      studio_name: studio.studio_name,
+      total_seats: studio.total_seats,
+      studio_type:
+        studio.studio_type as unknown as StudioDetailDto['studio_type'],
     };
   }
 
   /**
-   * GET /v1/studios/:studioId/seats
-   * Static seat map (layout only). Cacheable on client.
+   * GET /studios/:studioId/seats
+   * Static seat layout (no availability), ordered by row then number.
    */
   async getStudioSeatLayout(studioId: number): Promise<SeatLayoutItemDto[]> {
-    const studio = this.studios.find((s) => s.studioId === studioId);
-    if (!studio) throw new NotFoundException('Studio not found');
+    // Ensure studio exists (clear 404 instead of empty list)
+    const exists = await this.prisma.studio.findUnique({
+      where: { studio_id: studioId },
+      select: { studio_id: true },
+    });
+    if (!exists) throw new NotFoundException('Studio not found');
 
-    const rows = this.seats
-      .filter((seat) => seat.studioId === studioId)
-      .map<SeatLayoutItemDto>((seat) => ({
-        seat_id: String(seat.seatId),
-        row_letter: seat.rowLetter,
-        seat_number: seat.seatNumber,
-        is_blocked: seat.isBlocked,
-      }));
+    const seats = await this.prisma.seat.findMany({
+      where: { studio_id: studioId },
+      orderBy: [{ row_letter: 'asc' }, { seat_number: 'asc' }],
+      select: {
+        seat_id: true,
+        row_letter: true,
+        seat_number: true,
+        is_blocked: true,
+      },
+    });
 
-    // Optional: sort by row then seat number for a consistent layout
-    rows.sort((a, b) =>
-      a.row_letter === b.row_letter
-        ? a.seat_number - b.seat_number
-        : a.row_letter.localeCompare(b.row_letter),
-    );
-
-    return rows;
+    return seats.map((s) => ({
+      seat_id: s.seat_id,
+      row_letter: s.row_letter,
+      seat_number: s.seat_number,
+      is_blocked: s.is_blocked,
+    }));
   }
 
-  // ===== Helpers =====
+  /* --------------------------- Admin: Theaters CRUD -------------------------- */
 
   /**
-   * Build simple rectangular seat layouts with some blocked seats to simulate pillars etc.
-   * - Regular: 10 rows x 15 seats
-   * - IMAX:    12 rows x 20 seats
-   * - Premier:  6 rows x 12 seats
+   * POST /theaters
    */
-  private makeSeatLayouts(): Seat[] {
-    let idCounter = 1;
-    const all: Seat[] = [];
+  async createTheater(body: CreateTheaterDto): Promise<TheaterDetailDto> {
+    const created = await this.prisma.theater.create({
+      data: {
+        name: body.name,
+        address: body.address,
+        city: body.city,
+        phone: body.phone,
+      },
+      include: { studios: { select: { studio_id: true } } },
+    });
 
-    const rowLetters = (count: number) =>
-      Array.from({ length: count }, (_, i) =>
-        String.fromCharCode('A'.charCodeAt(0) + i),
-      );
-
-    const addLayout = (
-      studio: Studio,
-      rows: number,
-      cols: number,
-      blocked: Array<{ r: string; c: number }>,
-    ) => {
-      const letters = rowLetters(rows);
-      for (const r of letters) {
-        for (let c = 1; c <= cols; c++) {
-          const isBlocked = blocked.some((b) => b.r === r && b.c === c);
-          all.push({
-            seatId: idCounter++,
-            studioId: studio.studioId,
-            rowLetter: r,
-            seatNumber: c,
-            isBlocked,
-          });
-        }
-      }
+    return {
+      theater_id: created.theater_id,
+      name: created.name,
+      address: created.address,
+      city: created.city,
+      phone: created.phone,
+      studio_ids: created.studios.map((s) => s.studio_id),
     };
+  }
 
-    // Create per-studio layouts
-    for (const s of this.studios) {
-      if (s.studioType === 'Regular') {
-        addLayout(s, 10, 15, [
-          { r: 'E', c: 8 }, // example blocked seats
-          { r: 'F', c: 8 },
-        ]);
-      } else if (s.studioType === 'IMAX') {
-        addLayout(s, 12, 20, [
-          { r: 'G', c: 10 },
-          { r: 'H', c: 10 },
-        ]);
-      } else {
-        // Premier
-        addLayout(s, 6, 12, [
-          { r: 'C', c: 6 },
-          { r: 'C', c: 7 },
-        ]);
-      }
+  /**
+   * PATCH /theaters/:theaterId
+   */
+  async updateTheater(
+    theaterId: number,
+    body: UpdateTheaterDto,
+  ): Promise<TheaterDetailDto> {
+    // Ensure exists
+    const existing = await this.prisma.theater.findUnique({
+      where: { theater_id: theaterId },
+      select: { theater_id: true },
+    });
+    if (!existing) throw new NotFoundException('Theater not found');
+
+    const updated = await this.prisma.theater.update({
+      where: { theater_id: theaterId },
+      data: {
+        name: body.name,
+        address: body.address,
+        city: body.city,
+        phone: body.phone,
+      },
+      include: { studios: { select: { studio_id: true } } },
+    });
+
+    return {
+      theater_id: updated.theater_id,
+      name: updated.name,
+      address: updated.address,
+      city: updated.city,
+      phone: updated.phone,
+      studio_ids: updated.studios.map((s) => s.studio_id),
+    };
+  }
+
+  /**
+   * DELETE /theaters/:theaterId
+   * Safety: refuse delete if theater has studios.
+   */
+  async deleteTheater(theaterId: number): Promise<{ deleted: boolean }> {
+    const countStudios = await this.prisma.studio.count({
+      where: { theater_id: theaterId },
+    });
+    if (countStudios > 0) {
+      throw new BadRequestException('THEATER_HAS_STUDIOS');
     }
 
-    return all;
+    try {
+      await this.prisma.theater.delete({ where: { theater_id: theaterId } });
+      return { deleted: true };
+    } catch (e: any) {
+      if (e?.code === 'P2025') throw new NotFoundException('Theater not found');
+      throw e;
+    }
+  }
+
+  /* ---------------------- Admin: Studios CRUD & blocking --------------------- */
+
+  /**
+   * POST /theaters/:theaterId/studios
+   */
+  async createStudio(
+    theaterId: number,
+    body: CreateStudioDto,
+  ): Promise<StudioDetailDto> {
+    // Ensure theater exists
+    const theater = await this.prisma.theater.findUnique({
+      where: { theater_id: theaterId },
+      select: { theater_id: true },
+    });
+    if (!theater) throw new NotFoundException('Theater not found');
+
+    const created = await this.prisma.studio.create({
+      data: {
+        theater_id: theaterId,
+        studio_name: body.studio_name,
+        total_seats: body.total_seats,
+        studio_type: body.studio_type as StudioType,
+      },
+      select: {
+        studio_id: true,
+        theater_id: true,
+        studio_name: true,
+        total_seats: true,
+        studio_type: true,
+      },
+    });
+
+    return {
+      studio_id: created.studio_id,
+      theater_id: created.theater_id,
+      studio_name: created.studio_name,
+      total_seats: created.total_seats,
+      studio_type:
+        created.studio_type as unknown as StudioDetailDto['studio_type'],
+    };
+  }
+
+  /**
+   * PATCH /studios/:studioId
+   */
+  async updateStudio(
+    studioId: number,
+    body: UpdateStudioDto,
+  ): Promise<StudioDetailDto> {
+    const exists = await this.prisma.studio.findUnique({
+      where: { studio_id: studioId },
+      select: { studio_id: true },
+    });
+    if (!exists) throw new NotFoundException('Studio not found');
+
+    const updated = await this.prisma.studio.update({
+      where: { studio_id: studioId },
+      data: {
+        studio_name: body.studio_name,
+        total_seats: body.total_seats,
+        studio_type: body.studio_type as StudioType,
+      },
+      select: {
+        studio_id: true,
+        theater_id: true,
+        studio_name: true,
+        total_seats: true,
+        studio_type: true,
+      },
+    });
+
+    return {
+      studio_id: updated.studio_id,
+      theater_id: updated.theater_id,
+      studio_name: updated.studio_name,
+      total_seats: updated.total_seats,
+      studio_type:
+        updated.studio_type as unknown as StudioDetailDto['studio_type'],
+    };
+  }
+
+  /**
+   * DELETE /studios/:studioId
+   * Safety:
+   *  - refuse delete if studio has showtimes
+   *  - if safe, remove seats then the studio in one transaction
+   */
+  async deleteStudio(studioId: number): Promise<{ deleted: boolean }> {
+    const showtimeCount = await this.prisma.showtime.count({
+      where: { studio_id: studioId },
+    });
+    if (showtimeCount > 0) {
+      throw new BadRequestException('STUDIO_HAS_SHOWTIMES');
+    }
+
+    const exists = await this.prisma.studio.findUnique({
+      where: { studio_id: studioId },
+      select: { studio_id: true },
+    });
+    if (!exists) throw new NotFoundException('Studio not found');
+
+    await this.prisma.$transaction([
+      this.prisma.seat.deleteMany({ where: { studio_id: studioId } }),
+      this.prisma.studio.delete({ where: { studio_id: studioId } }),
+    ]);
+
+    return { deleted: true };
+  }
+
+  /**
+   * POST /studios/:studioId/seats/block
+   * Bulk block/unblock by row + numbers.
+   */
+  async blockSeats(
+    studioId: number,
+    body: BlockSeatsDto,
+  ): Promise<{ updated: number }> {
+    // Normalize rows to uppercase and dedupe targets
+    const targets = new Map<string, true>();
+    for (const b of body.blocks) {
+      const row = (b.row || '').toUpperCase().trim();
+      if (!row) continue;
+      for (const n of b.numbers) {
+        if (Number.isFinite(n) && n > 0) {
+          targets.set(`${row}:${n}`, true);
+        }
+      }
+    }
+    if (targets.size === 0) return { updated: 0 };
+
+    // Ensure studio exists
+    const studio = await this.prisma.studio.findUnique({
+      where: { studio_id: studioId },
+      select: { studio_id: true },
+    });
+    if (!studio) throw new NotFoundException('Studio not found');
+
+    // Build OR filter for existing seats
+    const orClauses: Prisma.SeatWhereInput[] = Array.from(targets.keys()).map(
+      (key) => {
+        const [row, num] = key.split(':');
+        return {
+          studio_id: studioId,
+          row_letter: row,
+          seat_number: Number(num),
+        };
+      },
+    );
+
+    const { count } = await this.prisma.seat.updateMany({
+      where: { OR: orClauses },
+      data: { is_blocked: body.isBlocked },
+    });
+
+    return { updated: count };
   }
 }
