@@ -2,117 +2,97 @@ import {
   Body,
   Controller,
   Get,
-  Headers,
   Param,
-  Patch,
+  ParseIntPipe,
   Post,
   Query,
   UseGuards,
-  UsePipes,
-  ValidationPipe,
-  ParseIntPipe,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiOkResponse, ApiTags } from '@nestjs/swagger';
 import { BookingsService } from './bookings.service';
 import { JwtAuthGuard } from 'src/common/guards/jwt-auth.guard';
+import { RolesGuard } from 'src/common/guards/roles.guard';
+import { Roles } from 'src/common/decorator/roles.decorator';
 import { CurrentUser } from 'src/common/decorator/current-user.decorator';
+import { User } from 'src/users/entities/user.entity';
 import { CreateBookingDto } from './dto/req/create-booking.dto';
 import { BookingDetailDto } from './dto/res/booking-detail.dto';
-import { BookingSummaryDto } from './dto/res/booking-summary.dto';
-import { ListBookingsQueryDto } from './dto/req/list-bookings-query.dto';
+import { MyBookingsQueryDto } from './dto/req/my-bookings-query.dto';
+import { BookingCancelDto } from './dto/req/booking-cancel.dto';
+import { AdminBookingsQueryDto } from './dto/req/admin-bookings-query.dto';
+import { UsersBookingsQueryDto } from './dto/req/users-bookings-query.dto';
 
 @ApiTags('bookings')
 @ApiBearerAuth()
-@UseGuards(JwtAuthGuard)
-@UsePipes(
-  new ValidationPipe({
-    whitelist: true,
-    forbidNonWhitelisted: true,
-    transform: true,
-  }),
-)
-@Controller('bookings')
+@UseGuards(JwtAuthGuard, RolesGuard)
+@Controller()
 export class BookingsController {
   constructor(private readonly bookingsService: BookingsService) {}
 
-  /**
-   * POST /v1/bookings
-   * Body: { showtimeId: number, seatIds: number[] }
-   * Auth required.
-   * Optional Idempotency-Key header supported.
-   *
-   * Creates a Pending booking (hold) + booking_seats line items
-   * with price_cents copied from showtimes.price at booking time.
-   *
-   * Business rules enforced in the service:
-   * - Seats must belong to the showtime’s studio and not be blocked.
-   * - Prevent double-booking (unique on {showtime_id, seat_id}).
-   */
-  @Post()
+  @Post('bookings')
   @ApiOkResponse({ type: BookingDetailDto })
-  async createBooking(
-    @CurrentUser() user: { sub: number; email: string },
-    @Body() dto: CreateBookingDto,
-    @Headers('Idempotency-Key') idempotencyKey?: string,
+  createBooking(
+    @CurrentUser() user: User,
+    @Body() body: CreateBookingDto,
   ): Promise<BookingDetailDto> {
-    return this.bookingsService.createPendingBooking({
-      userId: user.sub,
-      showtimeId: dto.showtimeId,
-      seatIds: dto.seatIds,
-      idempotencyKey,
-    });
+    return this.bookingsService.createBookingHold(user, body);
   }
 
-  /**
-   * GET /v1/bookings
-   * Auth required. Filter by booking_status (optional).
-   */
-  @Get()
-  @ApiOkResponse({ type: BookingSummaryDto, isArray: true })
-  async listMyBookings(
-    @CurrentUser() user: { sub: number },
-    @Query() query: ListBookingsQueryDto,
-  ): Promise<BookingSummaryDto[]> {
-    return this.bookingsService.listUserBookings(user.sub, query);
+  @Get('bookings/:bookingReference')
+  @ApiOkResponse({ type: BookingDetailDto })
+  getBookingByReference(
+    @Param('bookingReference') bookingReference: string,
+    @CurrentUser() user: User,
+  ): Promise<BookingDetailDto> {
+    return this.bookingsService.getBookingByReference(user, bookingReference);
   }
 
-  /**
-   * GET /v1/bookings/:bookingId
-   * Auth required. Returns booking header + seats + payment summary.
-   */
-  @Get(':bookingId')
-  @ApiOkResponse({ type: BookingDetailDto })
-  async getBookingDetail(
-    @CurrentUser() user: { sub: number },
-    @Param('bookingId', ParseIntPipe) bookingId: number,
-  ): Promise<BookingDetailDto> {
-    return this.bookingsService.getBookingDetail(user.sub, bookingId);
+  @Get('me/bookings')
+  @ApiOkResponse({ type: BookingDetailDto, isArray: true })
+  listMyBookings(
+    @CurrentUser() user: User,
+    @Query() query: MyBookingsQueryDto,
+  ): Promise<BookingDetailDto[]> {
+    return this.bookingsService.listMyBookings(user, query);
   }
 
-  /**
-   * PATCH /v1/bookings/:bookingId/cancel
-   * Auth required. Sets booking_status = Cancelled (frees seats).
-   */
-  @Patch(':bookingId/cancel')
-  @ApiOkResponse({ type: BookingDetailDto })
-  async cancelBooking(
-    @CurrentUser() user: { sub: number },
-    @Param('bookingId', ParseIntPipe) bookingId: number,
-  ): Promise<BookingDetailDto> {
-    return this.bookingsService.cancelBooking(user.sub, bookingId);
+  @Post('bookings/:bookingReference/cancel')
+  @ApiOkResponse({ schema: { example: { cancelled: true } } })
+  cancelBooking(
+    @Param('bookingReference') bookingReference: string,
+    @CurrentUser() user: User,
+    @Body() body: BookingCancelDto,
+  ): Promise<{ cancelled: boolean }> {
+    return this.bookingsService.cancelBooking(user, bookingReference, body);
   }
 
-  /**
-   * PATCH /v1/bookings/:bookingId/confirm
-   * Auth required (can also be called internally after payment success).
-   * Sets booking_status = Confirmed.
-   */
-  @Patch(':bookingId/confirm')
-  @ApiOkResponse({ type: BookingDetailDto })
-  async confirmBooking(
-    @CurrentUser() user: { sub: number },
-    @Param('bookingId', ParseIntPipe) bookingId: number,
-  ): Promise<BookingDetailDto> {
-    return this.bookingsService.confirmBooking(user.sub, bookingId);
+  @Roles('ADMIN')
+  @Post('bookings/:bookingReference/claim')
+  @ApiOkResponse({ schema: { example: { claimed: true } } })
+  claimBooking(
+    @Param('bookingReference') bookingReference: string,
+  ): Promise<{ claimed: boolean }> {
+    return this.bookingsService.claimBooking(bookingReference);
+  }
+
+  /** ADMIN: list all bookings (with filters & pagination cursor) */
+  @Roles('ADMIN')
+  @Get('bookings')
+  @ApiOkResponse({ type: BookingDetailDto, isArray: true })
+  listAllBookings(
+    @Query() query: AdminBookingsQueryDto,
+  ): Promise<BookingDetailDto[]> {
+    return this.bookingsService.listAllBookings(query);
+  }
+
+  /** ADMIN: list bookings for a specific user */
+  @Roles('ADMIN')
+  @Get('users/:userId/bookings')
+  @ApiOkResponse({ type: BookingDetailDto, isArray: true })
+  listUserBookings(
+    @Param('userId', ParseIntPipe) userId: number,
+    @Query() query: UsersBookingsQueryDto,
+  ): Promise<BookingDetailDto[]> {
+    return this.bookingsService.listUserBookings(userId, query);
   }
 }

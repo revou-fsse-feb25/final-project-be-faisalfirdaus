@@ -1,26 +1,28 @@
-// src/bookings/dto/res/booking-detail.dto.ts
 import { ApiProperty } from '@nestjs/swagger';
-import { BookingStatus } from '../../dto/req/list-bookings-query.dto';
-import { BookingSeatDto } from './booking-seat.dto';
-import { PaymentSummaryDto } from './payment-summary.dto';
 
+class BookingSeatDto {
+  @ApiProperty() booking_seat_id: number;
+  @ApiProperty() seat_id: number;
+  @ApiProperty() row: string;
+  @ApiProperty() number: number;
+  @ApiProperty() price: number;
+}
+class PaymentDto {
+  @ApiProperty() payment_id: number;
+  @ApiProperty() amount: number;
+  @ApiProperty() payment_time: string;
+  @ApiProperty({ enum: ['Delayed', 'Success', 'Failed'] }) status: string;
+}
 export class BookingDetailDto {
-  @ApiProperty() bookingId!: string;
-  @ApiProperty() booking_reference!: string;
-  @ApiProperty({ enum: BookingStatus }) booking_status!: BookingStatus;
-  @ApiProperty() hold_expires_at!: string | null;
-
-  @ApiProperty() userId!: string;
-  @ApiProperty() showtimeId!: string;
-
-  // denormalized snapshot fields
-  @ApiProperty() movieTitle!: string;
-  @ApiProperty() theaterName!: string;
-  @ApiProperty() studioName!: string;
-
-  @ApiProperty({ type: [BookingSeatDto] }) seats!: BookingSeatDto[];
-  @ApiProperty() total_amount!: number;
-
-  @ApiProperty({ type: PaymentSummaryDto, required: false })
-  payment?: PaymentSummaryDto;
+  @ApiProperty() booking_reference: string;
+  @ApiProperty({
+    enum: ['Pending', 'Confirmed', 'Claimed', 'Cancelled', 'Expired'],
+  })
+  booking_status: string;
+  @ApiProperty() showtime_id: number;
+  @ApiProperty() user_id: number;
+  @ApiProperty() total_amount: number;
+  @ApiProperty({ required: false }) hold_expires_at?: string;
+  @ApiProperty({ type: BookingSeatDto, isArray: true }) seats: BookingSeatDto[];
+  @ApiProperty({ type: PaymentDto, isArray: true }) payments: PaymentDto[];
 }
