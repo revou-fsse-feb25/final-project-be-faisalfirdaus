@@ -2,77 +2,82 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { UsersRepositoryInterface } from './users.repository.interface';
 import { User } from './entities/user.entity';
 import { UpdateUserDto } from './dto/req/update-user.dto';
+import { PrismaService } from 'src/prisma/prisma.service';
 
 @Injectable()
 export class UsersRepository implements UsersRepositoryInterface {
-  private users: User[] = [
-    {
-      id: '1',
-      username: 'john_doe',
-      email: '111@mail.com',
-      role: 'USER',
-      password: 'password123',
-      phone: '1234567890',
-      created_at: new Date('2023-01-01T00:00:00Z'),
-    },
-    {
-      id: '2',
-      username: 'john_smith',
-      email: '222@mail.com',
-      role: 'ADMIN',
-      password: 'password123',
-      phone: '1234567890',
-      created_at: new Date('2023-01-01T00:00:00Z'),
-    },
-  ];
+  constructor(private readonly prisma: PrismaService) {}
 
-  getAllUsers(): Promise<User[]> {
-    return this.users.length > 0
-      ? Promise.resolve(this.users)
-      : Promise.reject(new NotFoundException('No users found.'));
+  async getAllUsers(): Promise<User[]> {
+    const users = await this.prisma.user.findMany();
+
+    if (!users || users.length === 0) {
+      throw new NotFoundException('No users found.');
+    }
+
+    return users;
   }
 
-  getUserById(userId: string): Promise<User> {
-    const user = this.users.find((u) => u.id === userId.toString());
+  async getUserById(userId: number): Promise<User> {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+    });
     if (!user) {
       throw new NotFoundException(`User with ID ${userId} not found.`);
     }
-    return Promise.resolve(user);
+    return user;
   }
 
-  getUserByEmail(email: string): Promise<User> {
-    const user = this.users.find((u) => u.email === email);
-    if (!user) {
-      throw new NotFoundException(`User with email ${email} not found.`);
-    }
-    return Promise.resolve(user);
+  async getUserByEmail(email: string): Promise<User | null> {
+    const user = await this.prisma.user.findUnique({ where: { email } });
+    return user;
   }
 
-  createUser(user: User): Promise<User> {
-    this.users.push(user);
-    return Promise.resolve(user);
+  async createUser(user: Omit<User, 'id'>): Promise<User> {
+    return this.prisma.user.create({
+      data: {
+        username: user.username,
+        email: user.email,
+        password: user.password, // ⚠️ hash this before calling createUser!
+        phone: user.phone || '',
+        role: user.role,
+      },
+    });
   }
 
-  updateUserProfile(userId: string, body: UpdateUserDto): Promise<User> {
-    const id = String(userId); // normalize id comparison
-
+  async updateUserProfile(userId: number, body: UpdateUserDto): Promise<User> {
     // Defensive whitelist
     const data: Partial<User> = {};
     if (body.username !== undefined) data.username = body.username;
     if (body.phone !== undefined) data.phone = body.phone || '';
 
-    const userIndex = this.users.findIndex((u) => u.id === id);
-    if (userIndex === -1) {
-      throw new NotFoundException(`User with ID ${id} not found.`);
+    // Check if user exists
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId }, // use the right field (check your Prisma schema, could be `id` or `user_id`)
+    });
+
+    if (!user) {
+      throw new NotFoundException(`User with ID ${userId} not found.`);
     }
 
-    const updatedUser: User = { ...this.users[userIndex], ...data };
-    this.users[userIndex] = updatedUser;
-
-    return Promise.resolve(updatedUser);
+    // Update in DB
+    return this.prisma.user.update({
+      where: { id: userId },
+      data,
+    });
   }
 
-  deleteUser(userId: string): Promise<void> {
-    return Promise.resolve();
+  async deleteUser(userId: number): Promise<void> {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+    });
+
+    if (!user) {
+      throw new NotFoundException(`User with ID ${userId} not found.`);
+    }
+
+    await this.prisma.user.delete({
+      where: { id: userId },
+    });
   }
 }

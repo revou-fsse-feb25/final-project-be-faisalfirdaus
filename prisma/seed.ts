@@ -7,7 +7,7 @@ import {
   BookingStatus,
   PaymentStatus,
 } from '@prisma/client';
-import bcrypt from 'bcrypt';
+import * as bcrypt from 'bcryptjs';
 
 const prisma = new PrismaClient();
 
@@ -288,18 +288,31 @@ async function main() {
   const allStudios = theaters.flatMap((t) => t.studios);
 
   // --- SHOWTIMES ---
-  const showtimes = await Promise.all(
-    movies.map((m, i) =>
-      prisma.showtime.create({
-        data: {
-          movie_id: m.movie_id,
-          studio_id: allStudios[i % allStudios.length].studio_id,
-          show_datetime: new Date(Date.now() + (i + 1) * 86400000),
-          price: 45000 + i * 5000,
-        },
-      }),
-    ),
-  );
+  // Generate 7 days × 3 showtimes per day for each movie
+  const hours = [12, 15, 19]; // 12 PM, 3 PM, 7 PM
+
+  const showtimes: any[] = [];
+  for (const m of movies) {
+    for (let d = 0; d < 7; d++) {
+      // 7 days ahead
+      for (const h of hours) {
+        const studio = allStudios[(m.movie_id + d + h) % allStudios.length]; // rotate studios
+        const show_datetime = new Date();
+        show_datetime.setDate(show_datetime.getDate() + d);
+        show_datetime.setHours(h, 0, 0, 0);
+
+        const st = await prisma.showtime.create({
+          data: {
+            movie_id: m.movie_id,
+            studio_id: studio.studio_id,
+            show_datetime,
+            price: 45000 + (m.movie_id % 4) * 5000, // vary price a bit
+          },
+        });
+        showtimes.push(st);
+      }
+    }
+  }
 
   // --- BOOKINGS (10 bookings) ---
   for (let i = 0; i < 10; i++) {

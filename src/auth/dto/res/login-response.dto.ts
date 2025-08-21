@@ -2,7 +2,7 @@ export class LoginResponseDto {
   access_token: string;
   refresh_token: string;
   user: {
-    id: string;
+    id: number;
     email: string;
     role: string;
     username: string;

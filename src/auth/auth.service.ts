@@ -5,8 +5,7 @@ import { AuthServiceInterface } from './auth.service.interface';
 import { UsersRepository } from 'src/users/users.repository';
 import { JwtService } from '@nestjs/jwt';
 import { User } from 'src/users/entities/user.entity';
-import * as bcrypt from 'bcrypt';
-import { v4 as uuidv4 } from 'uuid';
+import * as bcrypt from 'bcryptjs';
 import { ConfigService } from '@nestjs/config';
 import { LoginResponseDto } from './dto/res/login-response.dto';
 import { RegisterResponseDto } from './dto/res/register-response.dto';
@@ -21,6 +20,7 @@ export class AuthService implements AuthServiceInterface {
 
   async userRegister(body: RegisterAuthDto): Promise<RegisterResponseDto> {
     const existingUser = await this.usersReository.getUserByEmail(body.email);
+    console.log('existingUser', existingUser);
     if (existingUser) {
       throw new UnauthorizedException(
         `User with email ${body.email} already exists.`,
@@ -29,8 +29,7 @@ export class AuthService implements AuthServiceInterface {
 
     const hashedPassword = await bcrypt.hash(body.password, 10);
 
-    const newUser: User = {
-      id: uuidv4(),
+    const newUser: Omit<User, 'id'> = {
       username: body.username,
       email: body.email,
       role: 'USER',
@@ -65,7 +64,8 @@ export class AuthService implements AuthServiceInterface {
     }
 
     // Verify password (⚠️ should use bcrypt.compare in production)
-    if (user.password !== body.password) {
+    const isPasswordValid = await bcrypt.compare(body.password, user.password);
+    if (!isPasswordValid) {
       throw new UnauthorizedException('Invalid email or password');
     }
 

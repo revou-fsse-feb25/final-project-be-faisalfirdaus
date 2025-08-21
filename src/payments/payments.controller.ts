@@ -1,34 +1,61 @@
-import { Controller, Get, Post, Body, Patch, Param, Delete } from '@nestjs/common';
+import {
+  Controller,
+  Post,
+  Body,
+  Param,
+  Req,
+  Get,
+  Headers,
+  UseGuards,
+} from '@nestjs/common';
 import { PaymentsService } from './payments.service';
-import { CreatePaymentDto } from './dto/create-payment.dto';
-import { UpdatePaymentDto } from './dto/update-payment.dto';
+import { CreatePaymentDto } from './dto/req/create-payment.dto';
+import { PaymentResponseDto } from './dto/res/payment-response.dto';
+import { PaymentWebhookDto } from './dto/req/payment-webhook.dto';
+import { JwtAuthGuard } from 'src/common/guards/jwt-auth.guard';
 
-@Controller('payments')
+@Controller()
 export class PaymentsController {
   constructor(private readonly paymentsService: PaymentsService) {}
 
-  @Post()
-  create(@Body() createPaymentDto: CreatePaymentDto) {
-    return this.paymentsService.create(createPaymentDto);
+  // POST /bookings/:id/payments
+  @UseGuards(JwtAuthGuard)
+  @Post('bookings/:id/payments')
+  async createPayment(
+    @Param('id') bookingId: string,
+    @Body() body: CreatePaymentDto,
+    @Req() req: any,
+  ): Promise<PaymentResponseDto> {
+    const userId = req.user.id;
+    return this.paymentsService.createPaymentIntent(
+      parseInt(bookingId, 10),
+      userId,
+      body,
+    );
   }
 
-  @Get()
-  findAll() {
-    return this.paymentsService.findAll();
+  // POST /payments/webhook (public, signed)
+  @Post('payments/webhook')
+  async handleWebhook(
+    @Body() dto: PaymentWebhookDto,
+    @Headers('x-signature') signature: string,
+  ) {
+    return this.paymentsService.handleWebhook(dto, signature);
   }
 
-  @Get(':id')
-  findOne(@Param('id') id: string) {
-    return this.paymentsService.findOne(+id);
-  }
-
-  @Patch(':id')
-  update(@Param('id') id: string, @Body() updatePaymentDto: UpdatePaymentDto) {
-    return this.paymentsService.update(+id, updatePaymentDto);
-  }
-
-  @Delete(':id')
-  remove(@Param('id') id: string) {
-    return this.paymentsService.remove(+id);
+  // GET /bookings/:id/payments
+  @UseGuards(JwtAuthGuard)
+  @Get('bookings/:id/payments')
+  async getPayments(
+    @Param('id') bookingId: string,
+    @Req() req: any,
+  ): Promise<PaymentResponseDto[]> {
+    const userId = req.user.id;
+    const isAdmin = req.user.role === 'ADMIN';
+    return this.paymentsService.listPayments(
+      parseInt(bookingId, 10),
+      userId,
+      isAdmin,
+    );
   }
 }
