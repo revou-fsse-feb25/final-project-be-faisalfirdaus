@@ -1,424 +1,436 @@
-// src/showtimes/showtimes.service.ts
-import { Injectable, NotFoundException } from '@nestjs/common';
+import {
+  Injectable,
+  BadRequestException,
+  NotFoundException,
+} from '@nestjs/common';
+import { Prisma, PrismaClient } from '@prisma/client';
+import { PrismaService } from 'src/prisma/prisma.service';
+import { ShowtimesListQueryDto } from './dto/req/showtimes-list-query.dto';
+import {
+  CreateShowtimeDto,
+  UpdateShowtimeDto,
+} from './dto/req/create-showtime.dto';
 import { ShowtimeDetailDto } from './dto/res/showtime-detail.dto';
 import { ShowtimeSeatAvailabilityDto } from './dto/res/showtime-seat-availability.dto';
 
-// ---------- Domain types (camelCased versions of your DB schema) ----------
-type MovieStatus = 'COMING_SOON' | 'NOW_SHOWING' | 'ARCHIVED';
-type StudioType = 'Regular' | 'IMAX' | 'Premier';
-type BookingStatus =
-  | 'Pending'
-  | 'Confirmed'
-  | 'Claimed'
-  | 'Cancelled'
-  | 'Expired';
-
-type Movie = {
-  movieId: number;
-  title: string;
-  description?: string | null;
-  durationMinutes: number;
-  posterUrl?: string | null;
-  status: MovieStatus;
-  isActive: boolean;
-};
-
-type Theater = {
-  theaterId: number;
-  name: string;
-  address: string;
-  city: string;
-  phone: string;
-};
-
-type Studio = {
-  studioId: number;
-  theaterId: number;
-  studioName: string;
-  totalSeats: number;
-  studioType: StudioType;
-};
-
-type Seat = {
-  seatId: number;
-  studioId: number;
-  rowLetter: string; // "A", "B", ...
-  seatNumber: number; // 1..N
-  isBlocked: boolean; // static block (pillar, broken seat, etc.)
-};
-
-type Showtime = {
-  showtimeId: number;
-  movieId: number;
-  studioId: number;
-  showDatetime: Date; // UTC
-  price: number; // int
-  isActive: boolean;
-};
-
-type Booking = {
-  id: number;
-  userId: number;
-  showtimeId: number;
-  bookingDatetime: Date;
-  bookingStatus: BookingStatus;
-  holdExpiresAt?: Date | null; // only meaningful for Pending
-  totalAmount: number;
-  bookingReference: string;
-};
-
-type BookingSeat = {
-  bookingSeatId: number;
-  bookingId: number;
-  seatId: number;
-  showtimeId: number;
-  priceCents: number;
-};
+const CI = Prisma.QueryMode.insensitive;
 
 @Injectable()
 export class ShowtimesService {
-  // =======================
-  // Dummy Data
-  // =======================
-  private readonly movies: Movie[] = [
-    {
-      movieId: 1,
-      title: 'The Electric Odyssey',
-      durationMinutes: 128,
-      posterUrl: '',
-      status: 'NOW_SHOWING',
-      isActive: true,
-    },
-    {
-      movieId: 2,
-      title: 'Garden of Echoes',
-      durationMinutes: 102,
-      posterUrl: '',
-      status: 'COMING_SOON',
-      isActive: true,
-    },
-  ];
+  constructor(private readonly prisma: PrismaService) {}
 
-  private readonly theaters: Theater[] = [
-    {
-      theaterId: 100,
-      name: 'Jakarta Central Cinema',
-      address: 'Jl. Merdeka 1',
-      city: 'Jakarta',
-      phone: '021-1111',
-    },
-    {
-      theaterId: 200,
-      name: 'Bandung Premiere',
-      address: 'Jl. Braga 10',
-      city: 'Bandung',
-      phone: '022-2222',
-    },
-  ];
+  /* -------------------------------------------------------------------------- */
+  /*                                   LISTING                                  */
+  /* -------------------------------------------------------------------------- */
 
-  private readonly studios: Studio[] = [
-    {
-      studioId: 1001,
-      theaterId: 100,
-      studioName: 'Studio 1',
-      totalSeats: 150,
-      studioType: 'Regular',
-    },
-    {
-      studioId: 1002,
-      theaterId: 100,
-      studioName: 'IMAX 1',
-      totalSeats: 220,
-      studioType: 'IMAX',
-    },
-    {
-      studioId: 2001,
-      theaterId: 200,
-      studioName: 'Premier A',
-      totalSeats: 80,
-      studioType: 'Premier',
-    },
-  ];
+  /**
+   * GET /showtimes
+   * Filters: movieId, theaterId, city, studioType, dateFrom, dateTo, isActive
+   * Pagination: cursor (showtime_id), limit (default 20)
+   */
+  async listShowtimes(
+    query: ShowtimesListQueryDto,
+  ): Promise<{ items: any[]; nextCursor?: string | null }> {
+    const take = Math.min(query?.limit ?? 20, 100);
+    const cursorId = query?.cursor ? Number(query.cursor) : undefined;
+    if (query?.cursor && Number.isNaN(cursorId)) {
+      throw new BadRequestException('Invalid cursor');
+    }
 
-  private readonly seats: Seat[] = this.buildSeatLayouts();
+    // Build where with joins for theater/city and studioType
+    const where: Prisma.ShowtimeWhereInput = {
+      ...(typeof query?.movieId === 'number'
+        ? { movie_id: query.movieId }
+        : {}),
+      ...(typeof query?.theaterId === 'number'
+        ? { studio: { theater_id: query.theaterId } }
+        : {}),
+      ...(query?.city
+        ? { studio: { theater: { city: { equals: query.city, mode: CI } } } }
+        : {}),
+      ...(query?.studioType
+        ? { studio: { studio_type: query.studioType as any } }
+        : {}),
+      ...(query?.dateFrom || query?.dateTo
+        ? {
+            show_datetime: {
+              ...(query?.dateFrom
+                ? { gte: startOfDayUTC(query.dateFrom) }
+                : {}),
+              ...(query?.dateTo ? { lte: endOfDayUTC(query.dateTo) } : {}),
+            },
+          }
+        : {}),
+      ...(typeof (query as any)?.isActive !== 'undefined'
+        ? {
+            is_active:
+              (query as any).isActive === 'true' ||
+              (query as any).isActive === true,
+          }
+        : {}),
+    };
 
-  private readonly showtimes: Showtime[] = [
-    {
-      showtimeId: 50001,
-      movieId: 1,
-      studioId: 1001,
-      showDatetime: new Date('2025-08-19T10:00:00Z'),
-      price: 50000,
-      isActive: true,
-    },
-    {
-      showtimeId: 50002,
-      movieId: 1,
-      studioId: 1002,
-      showDatetime: new Date('2025-08-19T13:30:00Z'),
-      price: 80000,
-      isActive: true,
-    },
-    {
-      showtimeId: 60001,
-      movieId: 1,
-      studioId: 2001,
-      showDatetime: new Date('2025-08-19T12:15:00Z'),
-      price: 70000,
-      isActive: false,
-    }, // inactive sample
-  ];
+    const rows = await this.prisma.showtime.findMany({
+      where,
+      orderBy: { showtime_id: 'asc' },
+      ...(cursorId ? { cursor: { showtime_id: cursorId }, skip: 1 } : {}),
+      take: take + 1,
+      select: {
+        showtime_id: true,
+        movie_id: true,
+        studio_id: true,
+        show_datetime: true,
+        price: true,
+        is_active: true,
+      },
+    });
 
-  // Bookings + booked/held seats (live availability)
-  private readonly bookings: Booking[] = [
-    // Confirmed booking (always occupies seats)
-    {
-      id: 9001,
-      userId: 42,
-      showtimeId: 50001,
-      bookingDatetime: new Date('2025-08-18T03:00:00Z'),
-      bookingStatus: 'Confirmed',
-      totalAmount: 100000,
-      bookingReference: 'ABC123',
-    },
-    // Pending (hold) — only occupies if not expired yet
-    {
-      id: 9002,
-      userId: 77,
-      showtimeId: 50001,
-      bookingDatetime: new Date('2025-08-19T02:00:00Z'),
-      bookingStatus: 'Pending',
-      holdExpiresAt: new Date('2025-08-19T09:59:59Z'),
-      totalAmount: 50000,
-      bookingReference: 'HOLD001',
-    },
-    // Cancelled — should NOT occupy seats
-    {
-      id: 9003,
-      userId: 55,
-      showtimeId: 50001,
-      bookingDatetime: new Date('2025-08-19T02:30:00Z'),
-      bookingStatus: 'Cancelled',
-      totalAmount: 50000,
-      bookingReference: 'CANCEL01',
-    },
-  ];
-
-  private readonly bookingSeats: BookingSeat[] = [
-    // Confirmed seats (occupied)
-    {
-      bookingSeatId: 1,
-      bookingId: 9001,
-      seatId: this.findSeatId(1001, 'D', 5),
-      showtimeId: 50001,
-      priceCents: 50000,
-    },
-    {
-      bookingSeatId: 2,
-      bookingId: 9001,
-      seatId: this.findSeatId(1001, 'D', 6),
-      showtimeId: 50001,
-      priceCents: 50000,
-    },
-    // Pending seats (occupied if not expired)
-    {
-      bookingSeatId: 3,
-      bookingId: 9002,
-      seatId: this.findSeatId(1001, 'E', 8),
-      showtimeId: 50001,
-      priceCents: 50000,
-    },
-    // Cancelled seats (should NOT occupy)
-    {
-      bookingSeatId: 4,
-      bookingId: 9003,
-      seatId: this.findSeatId(1001, 'E', 9),
-      showtimeId: 50001,
-      priceCents: 50000,
-    },
-  ];
-
-  // Quick lookup maps
-  private moviesById = new Map(this.movies.map((m) => [m.movieId, m]));
-  private theatersById = new Map(this.theaters.map((t) => [t.theaterId, t]));
-  private studiosById = new Map(this.studios.map((s) => [s.studioId, s]));
-  private seatsByStudio = new Map<number, Seat[]>(
-    this.studios.map((s) => [
-      s.studioId,
-      this.seats.filter((seat) => seat.studioId === s.studioId),
-    ]),
-  );
-
-  // =======================
-  // Public API
-  // =======================
-
-  async getShowtimeDetail(showtimeId: number): Promise<ShowtimeDetailDto> {
-    const st = this.showtimes.find((x) => x.showtimeId === showtimeId);
-    if (!st) throw new NotFoundException('Showtime not found');
-
-    const movie = this.moviesById.get(st.movieId);
-    const studio = this.studiosById.get(st.studioId);
-    if (!movie || !studio)
-      throw new NotFoundException('Related movie/studio not found');
-
-    const theater = this.theatersById.get(studio.theaterId);
-    if (!theater) throw new NotFoundException('Theater not found');
+    let nextCursor: string | null = null;
+    if (rows.length > take) {
+      const extra = rows.pop()!;
+      nextCursor = String(extra.showtime_id);
+    }
 
     return {
-      showtimeId: String(st.showtimeId),
-      movieId: String(movie.movieId),
-      movieTitle: movie.title,
-      theaterId: String(theater.theaterId),
-      theaterName: theater.name,
-      city: theater.city,
-      studioId: String(studio.studioId),
-      studioName: studio.studioName,
-      studioType: studio.studioType,
-      showDatetimeISO: st.showDatetime.toISOString(), // keep UTC ISO
-      price: st.price,
-      is_active: st.isActive,
+      items: rows.map((r) => ({
+        showtime_id: r.showtime_id,
+        movie_id: r.movie_id,
+        studio_id: r.studio_id,
+        show_datetime: r.show_datetime,
+        price: r.price,
+        is_active: r.is_active,
+      })),
+      nextCursor,
     };
   }
 
+  /* -------------------------------------------------------------------------- */
+  /*                                   DETAIL                                   */
+  /* -------------------------------------------------------------------------- */
+
   /**
-   * Merge static layout with live holds/bookings:
-   * - Seat is NOT available if:
-   *   - it's statically blocked, OR
-   *   - it appears in a booking for this showtime with status:
-   *       Confirmed / Claimed (always occupy), OR
-   *       Pending AND hold_expires_at > now
-   *   - Cancelled / Expired never occupy
+   * GET /showtimes/:showtimeId
+   */
+  async getShowtimeDetail(showtimeId: number): Promise<ShowtimeDetailDto> {
+    const st = await this.prisma.showtime.findUnique({
+      where: { showtime_id: showtimeId },
+      select: {
+        showtime_id: true,
+        movie_id: true,
+        studio_id: true,
+        show_datetime: true,
+        price: true,
+        is_active: true,
+        movie: { select: { title: true } },
+        studio: {
+          select: {
+            studio_name: true,
+            theater: { select: { name: true } },
+          },
+        },
+      },
+    });
+    if (!st) throw new NotFoundException('Showtime not found');
+
+    const dto: ShowtimeDetailDto = {
+      showtime_id: st.showtime_id,
+      movie_id: st.movie_id,
+      studio_id: st.studio_id,
+      show_datetime: st.show_datetime.toISOString(),
+      price: st.price,
+      is_active: st.is_active,
+      movie_title: st.movie.title,
+      theater_name: st.studio.theater.name,
+      studio_name: st.studio.studio_name,
+    };
+    return dto;
+  }
+
+  /* -------------------------------------------------------------------------- */
+  /*                              SEAT AVAILABILITY                              */
+  /* -------------------------------------------------------------------------- */
+
+  /**
+   * GET /showtimes/:showtimeId/seats
+   * Status per seat: BLOCKED | BOOKED | HELD | AVAILABLE
+   * - BLOCKED: Seat.is_blocked = true
+   * - BOOKED: seat has BookingSeat where parent Booking.status in (Confirmed, Claimed)
+   * - HELD:   seat has BookingSeat with Booking.status = Pending AND hold_expires_at > now()
    */
   async getShowtimeSeatAvailability(
     showtimeId: number,
   ): Promise<ShowtimeSeatAvailabilityDto[]> {
-    const st = this.showtimes.find((x) => x.showtimeId === showtimeId);
-    if (!st) throw new NotFoundException('Showtime not found');
+    // Load showtime & its studio id
+    const showtime = await this.prisma.showtime.findUnique({
+      where: { showtime_id: showtimeId },
+      select: { showtime_id: true, studio_id: true },
+    });
+    if (!showtime) throw new NotFoundException('Showtime not found');
 
-    const studio = this.studiosById.get(st.studioId);
-    if (!studio) throw new NotFoundException('Studio not found');
+    // 1) All seats in the studio (static layout)
+    const seats = await this.prisma.seat.findMany({
+      where: { studio_id: showtime.studio_id },
+      orderBy: [{ row_letter: 'asc' }, { seat_number: 'asc' }],
+      select: {
+        seat_id: true,
+        row_letter: true,
+        seat_number: true,
+        is_blocked: true,
+      },
+    });
 
-    const seats = this.seatsByStudio.get(studio.studioId) ?? [];
+    // 2) Booking seats for this showtime that are either BOOKED or HELD (not expired)
     const now = new Date();
+    const bookingSeats = await this.prisma.bookingSeat.findMany({
+      where: {
+        showtime_id: showtimeId,
+        booking: {
+          OR: [
+            { booking_status: { in: ['Confirmed', 'Claimed'] as any } },
+            { booking_status: 'Pending' as any, hold_expires_at: { gt: now } },
+          ],
+        },
+      },
+      select: {
+        seat_id: true,
+        booking: { select: { booking_status: true, hold_expires_at: true } },
+      },
+    });
 
-    const reservedSeatIds = this.computeReservedSeatIds(showtimeId, now);
+    const bookedSet = new Set<number>();
+    const heldMap = new Map<number, Date>(); // seat_id -> hold_expires_at
 
-    const rows: ShowtimeSeatAvailabilityDto[] = seats.map((seat) => ({
-      seat_id: String(seat.seatId),
-      row_letter: seat.rowLetter,
-      seat_number: seat.seatNumber,
-      is_blocked: seat.isBlocked,
-      is_available: !seat.isBlocked && !reservedSeatIds.has(seat.seatId),
-    }));
-
-    // Sort by row then seat number for deterministic layout
-    rows.sort((a, b) =>
-      a.row_letter === b.row_letter
-        ? a.seat_number - b.seat_number
-        : a.row_letter.localeCompare(b.row_letter),
-    );
-
-    return rows;
-  }
-
-  // =======================
-  // Helpers
-  // =======================
-
-  /** Build rectangular layouts per studio with a few blocked seats to simulate real-world quirks. */
-  private buildSeatLayouts(): Seat[] {
-    let id = 1;
-    const out: Seat[] = [];
-
-    const makeRows = (count: number) =>
-      Array.from({ length: count }, (_, i) =>
-        String.fromCharCode('A'.charCodeAt(0) + i),
-      );
-
-    const addLayout = (
-      studio: Studio,
-      rows: number,
-      cols: number,
-      blocked: Array<{ r: string; c: number }>,
-    ) => {
-      const letters = makeRows(rows);
-      for (const r of letters) {
-        for (let c = 1; c <= cols; c++) {
-          const isBlocked = blocked.some((b) => b.r === r && b.c === c);
-          out.push({
-            seatId: id++,
-            studioId: studio.studioId,
-            rowLetter: r,
-            seatNumber: c,
-            isBlocked,
-          });
+    for (const bs of bookingSeats) {
+      const status = bs.booking.booking_status;
+      if (status === 'Confirmed' || status === 'Claimed') {
+        bookedSet.add(bs.seat_id);
+      } else if (
+        status === 'Pending' &&
+        bs.booking.hold_expires_at &&
+        bs.booking.hold_expires_at > now
+      ) {
+        // Do not mark as held if already booked (booked has precedence)
+        if (!bookedSet.has(bs.seat_id)) {
+          heldMap.set(bs.seat_id, bs.booking.hold_expires_at);
         }
       }
-    };
+    }
 
-    for (const s of this.studios) {
-      if (s.studioType === 'Regular') {
-        addLayout(s, 10, 15, [
-          { r: 'E', c: 8 },
-          { r: 'F', c: 8 },
-        ]);
-      } else if (s.studioType === 'IMAX') {
-        addLayout(s, 12, 20, [
-          { r: 'G', c: 10 },
-          { r: 'H', c: 10 },
-        ]);
-      } else {
-        // Premier
-        addLayout(s, 6, 12, [
-          { r: 'C', c: 6 },
-          { r: 'C', c: 7 },
-        ]);
+    // 3) Merge statuses
+    const result: ShowtimeSeatAvailabilityDto[] = seats.map((s) => {
+      if (s.is_blocked) {
+        return {
+          seat_id: s.seat_id,
+          row: s.row_letter,
+          number: s.seat_number,
+          status: 'BLOCKED',
+        };
       }
+      if (bookedSet.has(s.seat_id)) {
+        return {
+          seat_id: s.seat_id,
+          row: s.row_letter,
+          number: s.seat_number,
+          status: 'BOOKED',
+        };
+      }
+      const held = heldMap.get(s.seat_id);
+      if (held) {
+        return {
+          seat_id: s.seat_id,
+          row: s.row_letter,
+          number: s.seat_number,
+          status: 'HELD',
+          hold_expires_at: held.toISOString(),
+        };
+      }
+      return {
+        seat_id: s.seat_id,
+        row: s.row_letter,
+        number: s.seat_number,
+        status: 'AVAILABLE',
+      };
+    });
+
+    return result;
+  }
+
+  /* -------------------------------------------------------------------------- */
+  /*                                 ADMIN CRUD                                 */
+  /* -------------------------------------------------------------------------- */
+
+  /**
+   * POST /showtimes
+   */
+  async createShowtime(body: CreateShowtimeDto): Promise<ShowtimeDetailDto> {
+    // Validate movie & studio exist
+    const [movie, studio] = await Promise.all([
+      this.prisma.movie.findUnique({
+        where: { movie_id: body.movie_id },
+        select: { movie_id: true, title: true },
+      }),
+      this.prisma.studio.findUnique({
+        where: { studio_id: body.studio_id },
+        select: {
+          studio_id: true,
+          studio_name: true,
+          theater: { select: { name: true } },
+        },
+      }),
+    ]);
+    if (!movie) throw new NotFoundException('Movie not found');
+    if (!studio) throw new NotFoundException('Studio not found');
+
+    const created = await this.prisma.showtime.create({
+      data: {
+        movie_id: body.movie_id,
+        studio_id: body.studio_id,
+        show_datetime: new Date(body.show_datetime),
+        price: body.price,
+        is_active: typeof body.is_active === 'boolean' ? body.is_active : true,
+      },
+      select: {
+        showtime_id: true,
+        movie_id: true,
+        studio_id: true,
+        show_datetime: true,
+        price: true,
+        is_active: true,
+      },
+    });
+
+    return {
+      showtime_id: created.showtime_id,
+      movie_id: created.movie_id,
+      studio_id: created.studio_id,
+      show_datetime: created.show_datetime.toISOString(),
+      price: created.price,
+      is_active: created.is_active,
+      movie_title: movie.title,
+      theater_name: studio.theater.name,
+      studio_name: studio.studio_name,
+    };
+  }
+
+  /**
+   * PATCH /showtimes/:showtimeId
+   */
+  async updateShowtime(
+    showtimeId: number,
+    body: UpdateShowtimeDto,
+  ): Promise<ShowtimeDetailDto> {
+    // Ensure exists
+    const exists = await this.prisma.showtime.findUnique({
+      where: { showtime_id: showtimeId },
+      select: { showtime_id: true },
+    });
+    if (!exists) throw new NotFoundException('Showtime not found');
+
+    // If moving movie_id/studio_id, validate targets exist
+    if (typeof body.movie_id === 'number') {
+      const m = await this.prisma.movie.findUnique({
+        where: { movie_id: body.movie_id },
+        select: { movie_id: true },
+      });
+      if (!m) throw new NotFoundException('Movie not found');
     }
-    return out;
-  }
-
-  /** Convenience: find a specific seat id by (studioId,row,number) in the generated layout. */
-  private findSeatId(studioId: number, row: string, num: number): number {
-    // This is safe here because buildSeatLayouts runs before this is called in dummy data init order.
-    const seat = this.seats?.find(
-      (s) =>
-        s.studioId === studioId && s.rowLetter === row && s.seatNumber === num,
-    );
-    if (!seat)
-      throw new Error(
-        `Dummy seat not found for studio=${studioId} ${row}${num}`,
-      );
-    return seat.seatId;
-  }
-
-  /** Compute seats occupied for this showtime at "now". */
-  private computeReservedSeatIds(showtimeId: number, now: Date): Set<number> {
-    const relevantBookings = this.bookings.filter(
-      (b) => b.showtimeId === showtimeId,
-    );
-    const byId = new Map(relevantBookings.map((b) => [b.id, b]));
-
-    const seatsForShowtime = this.bookingSeats.filter(
-      (bs) => bs.showtimeId === showtimeId,
-    );
-    const taken = new Set<number>();
-
-    for (const bs of seatsForShowtime) {
-      const booking = byId.get(bs.bookingId);
-      if (!booking) continue;
-
-      const status = booking.bookingStatus;
-      const occupies =
-        status === 'Confirmed' ||
-        status === 'Claimed' ||
-        (status === 'Pending' &&
-          booking.holdExpiresAt &&
-          booking.holdExpiresAt > now);
-
-      if (occupies) taken.add(bs.seatId);
+    if (typeof body.studio_id === 'number') {
+      const s = await this.prisma.studio.findUnique({
+        where: { studio_id: body.studio_id },
+        select: { studio_id: true },
+      });
+      if (!s) throw new NotFoundException('Studio not found');
     }
-    return taken;
+
+    const updated = await this.prisma.showtime.update({
+      where: { showtime_id: showtimeId },
+      data: {
+        movie_id: body.movie_id,
+        studio_id: body.studio_id,
+        show_datetime: body.show_datetime
+          ? new Date(body.show_datetime)
+          : undefined,
+        price: typeof body.price === 'number' ? body.price : undefined,
+        is_active:
+          typeof body.is_active === 'boolean' ? body.is_active : undefined,
+      },
+      select: {
+        showtime_id: true,
+        movie_id: true,
+        studio_id: true,
+        show_datetime: true,
+        price: true,
+        is_active: true,
+        movie: { select: { title: true } },
+        studio: {
+          select: { studio_name: true, theater: { select: { name: true } } },
+        },
+      },
+    });
+
+    return {
+      showtime_id: updated.showtime_id,
+      movie_id: updated.movie_id,
+      studio_id: updated.studio_id,
+      show_datetime: updated.show_datetime.toISOString(),
+      price: updated.price,
+      is_active: updated.is_active,
+      movie_title: updated.movie.title,
+      theater_name: updated.studio.theater.name,
+      studio_name: updated.studio.studio_name,
+    };
   }
+
+  /**
+   * DELETE /showtimes/:showtimeId
+   * If bookings exist for this showtime, we soft-disable it (is_active=false).
+   * Otherwise, delete the row.
+   */
+  async deleteShowtime(showtimeId: number): Promise<{ deleted: boolean }> {
+    const existing = await this.prisma.showtime.findUnique({
+      where: { showtime_id: showtimeId },
+      select: { showtime_id: true },
+    });
+    if (!existing) throw new NotFoundException('Showtime not found');
+
+    const bookings = await this.prisma.booking.count({
+      where: { showtime_id: showtimeId },
+    });
+    if (bookings > 0) {
+      await this.prisma.showtime.update({
+        where: { showtime_id: showtimeId },
+        data: { is_active: false },
+      });
+      return { deleted: true };
+    }
+
+    await this.prisma.showtime.delete({ where: { showtime_id: showtimeId } });
+    return { deleted: true };
+  }
+}
+
+/* --------------------------------- helpers --------------------------------- */
+
+function startOfDayUTC(dateStr: string): Date {
+  // Accepts 'YYYY-MM-DD' or ISO; normalizes to 00:00:00Z
+  const d = new Date(dateStr);
+  return new Date(
+    Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), 0, 0, 0, 0),
+  );
+}
+
+function endOfDayUTC(dateStr: string): Date {
+  // Normalizes to 23:59:59.999Z
+  const d = new Date(dateStr);
+  return new Date(
+    Date.UTC(
+      d.getUTCFullYear(),
+      d.getUTCMonth(),
+      d.getUTCDate(),
+      23,
+      59,
+      59,
+      999,
+    ),
+  );
 }

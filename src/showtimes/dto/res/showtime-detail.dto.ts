@@ -1,21 +1,13 @@
-// src/showtimes/dto/res/showtime-detail.dto.ts
-// import { ApiProperty } from '@nestjs/swagger';
+import { ApiProperty } from '@nestjs/swagger';
 
 export class ShowtimeDetailDto {
-  showtimeId!: string;
-
-  movieId!: string;
-  movieTitle!: string;
-
-  theaterId!: string;
-  theaterName!: string;
-  city!: string;
-
-  studioId!: string;
-  studioName!: string;
-  studioType!: 'Regular' | 'IMAX' | 'Premier';
-
-  showDatetimeISO!: string; // UTC ISO string (or your preferred TZ)
-  price!: number; // from showtimes.price
-  is_active!: boolean; // from showtimes.is_active
+  @ApiProperty() showtime_id: number;
+  @ApiProperty() movie_id: number;
+  @ApiProperty() studio_id: number;
+  @ApiProperty() show_datetime: string;
+  @ApiProperty() price: number;
+  @ApiProperty() is_active: boolean;
+  @ApiProperty() movie_title: string;
+  @ApiProperty() theater_name: string;
+  @ApiProperty() studio_name: string;
 }

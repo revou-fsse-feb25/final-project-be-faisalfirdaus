@@ -1,17 +1,31 @@
 import {
+  Body,
   Controller,
+  Delete,
   Get,
   Param,
   ParseIntPipe,
+  Patch,
+  Post,
+  Query,
+  UseGuards,
   UsePipes,
   ValidationPipe,
 } from '@nestjs/common';
-// import { ApiOkResponse, ApiTags } from '@nestjs/swagger';
+import { ApiBearerAuth, ApiOkResponse, ApiTags } from '@nestjs/swagger';
 import { ShowtimesService } from './showtimes.service';
 import { ShowtimeDetailDto } from './dto/res/showtime-detail.dto';
 import { ShowtimeSeatAvailabilityDto } from './dto/res/showtime-seat-availability.dto';
+import { ShowtimesListQueryDto } from './dto/req/showtimes-list-query.dto';
+import {
+  CreateShowtimeDto,
+  UpdateShowtimeDto,
+} from './dto/req/create-showtime.dto';
+import { JwtAuthGuard } from 'src/common/guards/jwt-auth.guard';
+import { RolesGuard } from 'src/common/guards/roles.guard';
+import { Roles } from 'src/common/decorator/roles.decorator';
 
-// @ApiTags('showtimes')
+@ApiTags('showtimes')
 @Controller('showtimes')
 @UsePipes(
   new ValidationPipe({
@@ -23,27 +37,58 @@ import { ShowtimeSeatAvailabilityDto } from './dto/res/showtime-seat-availabilit
 export class ShowtimesController {
   constructor(private readonly showtimesService: ShowtimesService) {}
 
-  /**
-   * GET /v1/showtimes/:showtimeId
-   * Return detail (movie, theater, studio, price, is_active)
-   */
+  @Get()
+  @ApiOkResponse({ schema: { example: { items: [], nextCursor: null } } })
+  listShowtimes(@Query() query: ShowtimesListQueryDto): Promise<any> {
+    return this.showtimesService.listShowtimes(query);
+  }
+
   @Get(':showtimeId')
-  // @ApiOkResponse({ type: ShowtimeDetailDto })
-  async getShowtimeDetail(
+  @ApiOkResponse({ type: ShowtimeDetailDto })
+  getShowtimeDetail(
     @Param('showtimeId', ParseIntPipe) showtimeId: number,
   ): Promise<ShowtimeDetailDto> {
     return this.showtimesService.getShowtimeDetail(showtimeId);
   }
 
-  /**
-   * GET /v1/showtimes/:showtimeId/seats
-   * Live availability for a showtime
-   */
   @Get(':showtimeId/seats')
-  // @ApiOkResponse({ type: ShowtimeSeatAvailabilityDto, isArray: true })
-  async getShowtimeSeatAvailability(
+  @ApiOkResponse({ type: ShowtimeSeatAvailabilityDto, isArray: true })
+  getShowtimeSeatAvailability(
     @Param('showtimeId', ParseIntPipe) showtimeId: number,
   ): Promise<ShowtimeSeatAvailabilityDto[]> {
     return this.showtimesService.getShowtimeSeatAvailability(showtimeId);
+  }
+
+  // Admin CRUD
+  @ApiBearerAuth()
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('ADMIN')
+  @Post()
+  @ApiOkResponse({ type: ShowtimeDetailDto })
+  createShowtime(@Body() body: CreateShowtimeDto): Promise<ShowtimeDetailDto> {
+    return this.showtimesService.createShowtime(body);
+  }
+
+  @ApiBearerAuth()
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('ADMIN')
+  @Patch(':showtimeId')
+  @ApiOkResponse({ type: ShowtimeDetailDto })
+  updateShowtime(
+    @Param('showtimeId', ParseIntPipe) showtimeId: number,
+    @Body() body: UpdateShowtimeDto,
+  ): Promise<ShowtimeDetailDto> {
+    return this.showtimesService.updateShowtime(showtimeId, body);
+  }
+
+  @ApiBearerAuth()
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('ADMIN')
+  @Delete(':showtimeId')
+  @ApiOkResponse({ schema: { example: { deleted: true } } })
+  deleteShowtime(
+    @Param('showtimeId', ParseIntPipe) showtimeId: number,
+  ): Promise<{ deleted: boolean }> {
+    return this.showtimesService.deleteShowtime(showtimeId);
   }
 }
